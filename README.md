@@ -56,3 +56,9 @@ When you `pull` on the other system, if the source resolution differs from the d
 1. Detects your destination resolution from `eqclient.ini`.
 2. Translates the position coordinates (`XPos`, `YPos`, `XOffset`, `YOffset`) of all UI windows proportionally.
 3. Leaves window widths/heights constant (under `scale_position` mode) so text remains fully readable and doesn't clip.
+
+## License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Disclaimer
+This project was developed with the assistance of Antigravity, an AI coding assistant by Google DeepMind.
