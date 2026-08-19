@@ -1,0 +1,12 @@
+# System-specific configuration (contains local paths, resolutions, and machine names)
+config.json
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS specific
+.DS_Store
+Thumbs.db
