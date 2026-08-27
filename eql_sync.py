@@ -102,17 +102,20 @@ def detect_resolution(eq_dir, config_resolution):
     
     return config_resolution
 
-def make_backup(eq_dir, filename):
+def make_backup(eq_dir, filename, dry_run=False):
     """Creates a local timestamped backup of a file in the sync_backups folder."""
     src = os.path.join(eq_dir, filename)
     if not os.path.exists(src):
         return
     
     backup_dir = os.path.join(eq_dir, "sync_backups")
-    os.makedirs(backup_dir, exist_ok=True)
-    
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dst = os.path.join(backup_dir, f"{filename}.{timestamp}.bak")
+    if dry_run:
+        print(f"    [DRY-RUN] Would create backup of {filename} at {dst}")
+        return
+        
+    os.makedirs(backup_dir, exist_ok=True)
     shutil.copy2(src, dst)
     print(f"Backup created: {dst}")
 
@@ -249,6 +252,39 @@ def cmd_init():
     save_config(config)
     print("\nSetup complete! You can run 'python eql_sync.py push' to sync local changes up to the shared folder.")
 
+def find_character_configs(search_dir, char_name):
+    """
+    Finds all character INI configs matching the name prefix in the given directory.
+    - If `char_name.ini` exists, it is included.
+    - If any `char_name_*.ini` exists, they are included.
+    - Ignores files starting with 'UI_'.
+    Returns a list of base filenames (without extension).
+    """
+    configs = []
+    
+    # 1. Check exact match
+    exact_file = f"{char_name}.ini"
+    if os.path.exists(os.path.join(search_dir, exact_file)):
+        configs.append(char_name)
+        
+    # 2. Check pattern matches (char_name_*.ini)
+    if os.path.exists(search_dir):
+        try:
+            for f in os.listdir(search_dir):
+                f_lower = f.lower()
+                # Exclude UI_ files
+                if f_lower.startswith("ui_"):
+                    continue
+                if f_lower.startswith(f"{char_name.lower()}_") and f_lower.endswith(".ini"):
+                    base = os.path.splitext(f)[0]
+                    # Retain original case of the filename found in directory
+                    if base not in configs:
+                        configs.append(base)
+        except Exception as e:
+            print(f"Warning: Failed to list directory {search_dir}: {e}")
+            
+    return configs
+
 def cmd_push(args=None):
     config = load_config()
     eq_dir = config["eq_dir"]
@@ -259,8 +295,10 @@ def cmd_push(args=None):
     # Handle overrides from command line arguments
     ui_mode = config["ui_sync_mode"]
     force = False
+    dry_run = False
     if args:
         force = getattr(args, "force", False)
+        dry_run = getattr(args, "dry_run", False)
         if getattr(args, "no_ui", False):
             ui_mode = "none"
         elif getattr(args, "ui_mode", None):
@@ -270,10 +308,14 @@ def cmd_push(args=None):
         print(f"Error: EverQuest directory does not exist: {eq_dir}")
         sys.exit(1)
 
-    os.makedirs(sync_dir, exist_ok=True)
+    if not dry_run:
+        os.makedirs(sync_dir, exist_ok=True)
     
-    check_game_state_and_confirm(force=force)
+    check_game_state_and_confirm(force=(force or dry_run))
     local_res = detect_resolution(eq_dir, config_res)
+
+    if dry_run:
+        print("\n=== DRY-RUN MODE (No changes will be written) ===")
 
     print(f"\nPushing settings from machine '{config['machine_name']}'...")
     if ui_mode == "none":
@@ -281,58 +323,71 @@ def cmd_push(args=None):
     
     for char in characters:
         print(f"\n--- Syncing Character: {char} ---")
-        
-        # 1. Character options & macros (e.g. Faugus_legends.ini)
-        char_ini = f"{char}.ini"
-        local_char_path = os.path.join(eq_dir, char_ini)
-        sync_char_path = os.path.join(sync_dir, char_ini)
-        
-        if os.path.exists(local_char_path):
-            # Check modification time to prevent overwriting newer sync data
-            # unless forced.
-            if os.path.exists(sync_char_path):
-                local_mtime = os.path.getmtime(local_char_path)
-                sync_mtime = os.path.getmtime(sync_char_path)
-                if sync_mtime > local_mtime:
-                    print(f"Warning: Synced file {char_ini} is newer than local file!")
-                    if force:
-                        print("Forcing overwrite of synced file (--force).")
-                    else:
-                        confirm = input("Overwrite synced file anyway? (y/N): ")
-                        if confirm.lower() != 'y':
-                            print("Skipping character settings.")
-                            continue
+        char_configs = find_character_configs(eq_dir, char)
+        if not char_configs:
+            print(f"Warning: No configuration files found matching '{char}' in local EQ directory.")
+            continue
             
-            shutil.copy2(local_char_path, sync_char_path)
-            print(f"Copied {char_ini} to sync folder.")
-        else:
-            print(f"Warning: Local file not found: {local_char_path}")
-
-        # 2. UI options & window layout (e.g. UI_Faugus_legends.ini)
-        if ui_mode != "none":
-            ui_ini = f"UI_{char}.ini"
-            local_ui_path = os.path.join(eq_dir, ui_ini)
-            sync_ui_path = os.path.join(sync_dir, ui_ini)
-            sync_meta_path = os.path.join(sync_dir, f"UI_{char}.meta.json")
-
-            if os.path.exists(local_ui_path):
-                # Copy the file to sync folder
-                shutil.copy2(local_ui_path, sync_ui_path)
-                print(f"Copied {ui_ini} to sync folder.")
+        for config_name in char_configs:
+            print(f"  Syncing config profile: {config_name}")
+            # 1. Character options & macros (e.g. Faugus_legends.ini)
+            char_ini = f"{config_name}.ini"
+            local_char_path = os.path.join(eq_dir, char_ini)
+            sync_char_path = os.path.join(sync_dir, char_ini)
+            
+            if os.path.exists(local_char_path):
+                # Check modification time to prevent overwriting newer sync data
+                # unless forced.
+                if os.path.exists(sync_char_path):
+                    local_mtime = os.path.getmtime(local_char_path)
+                    sync_mtime = os.path.getmtime(sync_char_path)
+                    if sync_mtime > local_mtime:
+                        print(f"    Warning: Synced file {char_ini} is newer than local file!")
+                        if force or dry_run:
+                            print("    Forcing overwrite of synced file (--force).")
+                        else:
+                            confirm = input("    Overwrite synced file anyway? (y/N): ")
+                            if confirm.lower() != 'y':
+                                print("    Skipping character settings.")
+                                continue
                 
-                # Write metadata detailing resolution and timestamp
-                meta = {
-                    "source_machine": config["machine_name"],
-                    "resolution": local_res,
-                    "timestamp": datetime.datetime.now().isoformat()
-                }
-                with open(sync_meta_path, "w", encoding="utf-8") as mf:
-                    json.dump(meta, mf, indent=2)
-                print(f"Saved layout metadata: {sync_meta_path}")
+                if dry_run:
+                    print(f"    [DRY-RUN] Would copy {char_ini} to sync folder.")
+                else:
+                    shutil.copy2(local_char_path, sync_char_path)
+                    print(f"    Copied {char_ini} to sync folder.")
             else:
-                print(f"Warning: Local UI layout file not found: {local_ui_path}")
-        else:
-            print("UI layout sync disabled in settings (skipped).")
+                print(f"    Warning: Local file not found: {local_char_path}")
+
+            # 2. UI options & window layout (e.g. UI_Faugus_legends.ini)
+            if ui_mode != "none":
+                ui_ini = f"UI_{config_name}.ini"
+                local_ui_path = os.path.join(eq_dir, ui_ini)
+                sync_ui_path = os.path.join(sync_dir, ui_ini)
+                sync_meta_path = os.path.join(sync_dir, f"UI_{config_name}.meta.json")
+
+                if os.path.exists(local_ui_path):
+                    if dry_run:
+                        print(f"    [DRY-RUN] Would copy {ui_ini} to sync folder.")
+                        print(f"    [DRY-RUN] Would write layout metadata: {sync_meta_path}")
+                    else:
+                        # Copy the file to sync folder
+                        shutil.copy2(local_ui_path, sync_ui_path)
+                        print(f"    Copied {ui_ini} to sync folder.")
+                        
+                        # Write metadata detailing resolution and timestamp
+                        meta = {
+                            "source_machine": config["machine_name"],
+                            "resolution": local_res,
+                            "timestamp": datetime.datetime.now().isoformat()
+                        }
+                        with open(sync_meta_path, "w", encoding="utf-8") as mf:
+                            json.dump(meta, mf, indent=2)
+                        print(f"    Saved layout metadata: {sync_meta_path}")
+                else:
+                    print(f"    Warning: Local UI layout file not found: {local_ui_path}")
+            else:
+                print("    UI layout sync disabled/skipped.")
 
     print("\nPush completed successfully!")
 
@@ -346,8 +401,10 @@ def cmd_pull(args=None):
     # Handle overrides from command line arguments
     ui_mode = config["ui_sync_mode"]
     force = False
+    dry_run = False
     if args:
         force = getattr(args, "force", False)
+        dry_run = getattr(args, "dry_run", False)
         if getattr(args, "no_ui", False):
             ui_mode = "none"
         elif getattr(args, "ui_mode", None):
@@ -361,90 +418,108 @@ def cmd_pull(args=None):
         print(f"Error: Local EverQuest directory does not exist: {eq_dir}")
         sys.exit(1)
 
-    check_game_state_and_confirm(force=force)
+    check_game_state_and_confirm(force=(force or dry_run))
     local_res = detect_resolution(eq_dir, config_res)
+
+    if dry_run:
+        print("\n=== DRY-RUN MODE (No changes will be written) ===")
 
     print(f"\nPulling settings to machine '{config['machine_name']}'...")
 
     for char in characters:
         print(f"\n--- Syncing Character: {char} ---")
-        
-        # 1. Character options & macros (e.g. Faugus_legends.ini)
-        char_ini = f"{char}.ini"
-        local_char_path = os.path.join(eq_dir, char_ini)
-        sync_char_path = os.path.join(sync_dir, char_ini)
-
-        if os.path.exists(sync_char_path):
-            if os.path.exists(local_char_path):
-                local_mtime = os.path.getmtime(local_char_path)
-                sync_mtime = os.path.getmtime(sync_char_path)
-                if local_mtime > sync_mtime:
-                    print(f"Warning: Local file {char_ini} is newer than synced file!")
-                    if force:
-                        print("Forcing overwrite of local changes (--force).")
-                    else:
-                        confirm = input("Overwrite local changes? (y/N): ")
-                        if confirm.lower() != 'y':
-                            print("Skipping character settings pull.")
-                            continue
-                
-                # Backup before overwrite
-                make_backup(eq_dir, char_ini)
+        char_configs = find_character_configs(sync_dir, char)
+        if not char_configs:
+            print(f"Warning: No configuration files found matching '{char}' in sync directory.")
+            continue
             
-            shutil.copy2(sync_char_path, local_char_path)
-            print(f"Updated local {char_ini} from sync folder.")
-        else:
-            print(f"Warning: Synced file not found in shared folder: {sync_char_path}")
+        for config_name in char_configs:
+            print(f"  Syncing config profile: {config_name}")
+            # 1. Character options & macros (e.g. Faugus_legends.ini)
+            char_ini = f"{config_name}.ini"
+            local_char_path = os.path.join(eq_dir, char_ini)
+            sync_char_path = os.path.join(sync_dir, char_ini)
 
-        # 2. UI options & window layout (e.g. UI_Faugus_legends.ini)
-        if ui_mode != "none":
-            ui_ini = f"UI_{char}.ini"
-            local_ui_path = os.path.join(eq_dir, ui_ini)
-            sync_ui_path = os.path.join(sync_dir, ui_ini)
-            sync_meta_path = os.path.join(sync_dir, f"UI_{char}.meta.json")
-
-            if os.path.exists(sync_ui_path):
-                # Check metadata to scale coordinates
-                src_res = local_res # Default assumption if meta missing
-                if os.path.exists(sync_meta_path):
-                    try:
-                        with open(sync_meta_path, "r", encoding="utf-8") as mf:
-                            meta_data = json.load(mf)
-                            src_res = meta_data.get("resolution", local_res)
-                    except Exception as e:
-                        print(f"Warning: Failed to parse metadata file: {e}")
-
-                if os.path.exists(local_ui_path):
-                    # Check modified times
-                    local_mtime = os.path.getmtime(local_ui_path)
-                    sync_mtime = os.path.getmtime(sync_ui_path)
+            if os.path.exists(sync_char_path):
+                if os.path.exists(local_char_path):
+                    local_mtime = os.path.getmtime(local_char_path)
+                    sync_mtime = os.path.getmtime(sync_char_path)
                     if local_mtime > sync_mtime:
-                        print(f"Warning: Local UI file {ui_ini} is newer than synced file!")
-                        if force:
-                            print("Forcing overwrite of local UI changes (--force).")
+                        print(f"    Warning: Local file {char_ini} is newer than synced file!")
+                        if force or dry_run:
+                            print("    Forcing overwrite of local changes (--force).")
                         else:
-                            confirm = input("Overwrite local UI changes? (y/N): ")
+                            confirm = input("    Overwrite local changes? (y/N): ")
                             if confirm.lower() != 'y':
-                                print("Skipping UI pull.")
+                                print("    Skipping character settings pull.")
                                 continue
                     
-                    make_backup(eq_dir, ui_ini)
-
-                # Process scaling if modes dictate
-                if ui_mode in ("scale_position", "scale_all") and src_res != local_res:
-                    print(f"Translating coordinates from {src_res[0]}x{src_res[1]} -> {local_res[0]}x{local_res[1]} (Mode: {ui_mode})...")
-                    ui_config = load_ini(sync_ui_path)
-                    scaled_config = scale_ui_coordinates(ui_config, src_res, local_res, ui_mode)
-                    save_ini(scaled_config, local_ui_path)
-                    print(f"Updated and scaled local {ui_ini}")
+                    # Backup before overwrite
+                    make_backup(eq_dir, char_ini, dry_run=dry_run)
+                
+                if dry_run:
+                    print(f"    [DRY-RUN] Would update local {char_ini} from sync folder.")
                 else:
-                    # 'exact' copy or resolutions match
-                    shutil.copy2(sync_ui_path, local_ui_path)
-                    print(f"Updated local {ui_ini} (Exact copy)")
+                    shutil.copy2(sync_char_path, local_char_path)
+                    print(f"    Updated local {char_ini} from sync folder.")
             else:
-                print(f"Warning: Synced UI file not found in shared folder: {sync_ui_path}")
-        else:
-            print("UI layout sync disabled in settings (skipped).")
+                print(f"    Warning: Synced file not found in shared folder: {sync_char_path}")
+
+            # 2. UI options & window layout (e.g. UI_Faugus_legends.ini)
+            if ui_mode != "none":
+                ui_ini = f"UI_{config_name}.ini"
+                local_ui_path = os.path.join(eq_dir, ui_ini)
+                sync_ui_path = os.path.join(sync_dir, ui_ini)
+                sync_meta_path = os.path.join(sync_dir, f"UI_{config_name}.meta.json")
+
+                if os.path.exists(sync_ui_path):
+                    # Check metadata to scale coordinates
+                    src_res = local_res # Default assumption if meta missing
+                    if os.path.exists(sync_meta_path):
+                        try:
+                            with open(sync_meta_path, "r", encoding="utf-8") as mf:
+                                meta_data = json.load(mf)
+                                src_res = meta_data.get("resolution", local_res)
+                        except Exception as e:
+                            print(f"    Warning: Failed to parse metadata file: {e}")
+
+                    if os.path.exists(local_ui_path):
+                        # Check modified times
+                        local_mtime = os.path.getmtime(local_ui_path)
+                        sync_mtime = os.path.getmtime(sync_ui_path)
+                        if local_mtime > sync_mtime:
+                            print(f"    Warning: Local UI file {ui_ini} is newer than synced file!")
+                            if force or dry_run:
+                                print("    Forcing overwrite of local UI changes (--force).")
+                            else:
+                                confirm = input("    Overwrite local UI changes? (y/N): ")
+                                if confirm.lower() != 'y':
+                                    print("    Skipping UI pull.")
+                                    continue
+                        
+                        make_backup(eq_dir, ui_ini, dry_run=dry_run)
+
+                    # Process scaling if modes dictate
+                    if ui_mode in ("scale_position", "scale_all") and src_res != local_res:
+                        if dry_run:
+                            print(f"    [DRY-RUN] Would translate coordinates from {src_res[0]}x{src_res[1]} -> {local_res[0]}x{local_res[1]} and save to local {ui_ini}")
+                        else:
+                            print(f"    Translating coordinates from {src_res[0]}x{src_res[1]} -> {local_res[0]}x{local_res[1]} (Mode: {ui_mode})...")
+                            ui_config = load_ini(sync_ui_path)
+                            scaled_config = scale_ui_coordinates(ui_config, src_res, local_res, ui_mode)
+                            save_ini(scaled_config, local_ui_path)
+                            print(f"    Updated and scaled local {ui_ini}")
+                    else:
+                        if dry_run:
+                            print(f"    [DRY-RUN] Would update local {ui_ini} (Exact copy)")
+                        else:
+                            # 'exact' copy or resolutions match
+                            shutil.copy2(sync_ui_path, local_ui_path)
+                            print(f"    Updated local {ui_ini} (Exact copy)")
+                else:
+                    print(f"    Warning: Synced UI file not found in shared folder: {sync_ui_path}")
+            else:
+                print("    UI layout sync disabled/skipped.")
 
     print("\nPull completed successfully!")
 
@@ -464,19 +539,30 @@ def cmd_status():
     print("\nCharacters Syncing:")
     for char in config.get("characters", []):
         print(f"  - {char}")
-        char_path = os.path.join(eq_dir, f"{char}.ini")
-        if os.path.exists(char_path):
-            local_time = datetime.datetime.fromtimestamp(os.path.getmtime(char_path)).isoformat()
-            print(f"    Local .ini modified: {local_time}")
-        else:
-            print("    Local .ini: NOT FOUND")
+        # Search both local and sync dir to list status of all profiles
+        char_configs = find_character_configs(eq_dir, char)
+        if not char_configs:
+            char_configs = find_character_configs(sync_dir, char)
+            
+        if not char_configs:
+            print("    Local/Sync profile: NOT FOUND")
+            continue
+            
+        for config_name in char_configs:
+            print(f"    Profile: {config_name}")
+            char_path = os.path.join(eq_dir, f"{config_name}.ini")
+            if os.path.exists(char_path):
+                local_time = datetime.datetime.fromtimestamp(os.path.getmtime(char_path)).isoformat()
+                print(f"      Local .ini modified: {local_time}")
+            else:
+                print("      Local .ini: NOT FOUND")
 
-        ui_path = os.path.join(eq_dir, f"UI_{char}.ini")
-        if os.path.exists(ui_path):
-            local_time = datetime.datetime.fromtimestamp(os.path.getmtime(ui_path)).isoformat()
-            print(f"    Local UI modified:   {local_time}")
-        else:
-            print("    Local UI:   NOT FOUND")
+            ui_path = os.path.join(eq_dir, f"UI_{config_name}.ini")
+            if os.path.exists(ui_path):
+                local_time = datetime.datetime.fromtimestamp(os.path.getmtime(ui_path)).isoformat()
+                print(f"      Local UI modified:   {local_time}")
+            else:
+                print("      Local UI:   NOT FOUND")
 
 def main():
     import argparse
@@ -491,12 +577,14 @@ def main():
     push_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
     push_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
     push_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
+    push_parser.add_argument("--dry-run", action="store_true", help="Simulate pushing settings without writing any files")
 
     # pull
     pull_parser = subparsers.add_parser("pull", help="Pull settings from sync folder")
     pull_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
     pull_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
     pull_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
+    pull_parser.add_argument("--dry-run", action="store_true", help="Simulate pulling settings without writing any files")
 
     # status
     subparsers.add_parser("status", help="Show current sync status")

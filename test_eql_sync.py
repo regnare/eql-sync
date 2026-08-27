@@ -229,5 +229,138 @@ SomeCamelCaseKey=Value
         finally:
             eql_sync.get_config_path = old_get_config_path
 
+    def test_prefix_pattern_discovery(self):
+        import json
+        from eql_sync import cmd_push, cmd_pull
+        
+        # Setup directories
+        eq_dir = os.path.join(self.test_dir, "eq")
+        sync_dir = os.path.join(self.test_dir, "sync")
+        os.makedirs(eq_dir)
+        os.makedirs(sync_dir)
+        
+        # Write config.json with character prefix "Regnare"
+        config = {
+            "eq_dir": eq_dir,
+            "sync_dir": sync_dir,
+            "characters": ["Regnare"],
+            "ui_sync_mode": "none",
+            "resolution": [2560, 1440],
+            "machine_name": "desktop"
+        }
+        config_path = os.path.join(self.test_dir, "config.json")
+        with open(config_path, "w") as f:
+            json.dump(config, f)
+            
+        # Mock get_config_path
+        import eql_sync
+        old_get_config_path = eql_sync.get_config_path
+        eql_sync.get_config_path = lambda: config_path
+        
+        try:
+            # Create files with server name suffix
+            char1_ini = "Regnare_freeport_LO1.ini"
+            char2_ini = "Regnare_freeport_LO2.ini"
+            
+            with open(os.path.join(eq_dir, char1_ini), "w") as f:
+                f.write("[Socials]\nPage1=1\n")
+            with open(os.path.join(eq_dir, char2_ini), "w") as f:
+                f.write("[Socials]\nPage1=2\n")
+                
+            # Define mock args
+            class MockArgs:
+                def __init__(self, force=True):
+                    self.no_ui = False
+                    self.ui_mode = None
+                    self.force = force
+            
+            # Push
+            cmd_push(MockArgs())
+            
+            # Verify both files are copied to sync_dir
+            self.assertTrue(os.path.exists(os.path.join(sync_dir, char1_ini)))
+            self.assertTrue(os.path.exists(os.path.join(sync_dir, char2_ini)))
+            
+            # Remove local files
+            os.remove(os.path.join(eq_dir, char1_ini))
+            os.remove(os.path.join(eq_dir, char2_ini))
+            
+            # Pull
+            cmd_pull(MockArgs())
+            
+            # Verify both files are pulled back
+            self.assertTrue(os.path.exists(os.path.join(eq_dir, char1_ini)))
+            self.assertTrue(os.path.exists(os.path.join(eq_dir, char2_ini)))
+            
+        finally:
+            eql_sync.get_config_path = old_get_config_path
+
+    def test_dry_run_push_pull(self):
+        import json
+        from eql_sync import cmd_push, cmd_pull
+        
+        # Setup directories
+        eq_dir = os.path.join(self.test_dir, "eq")
+        sync_dir = os.path.join(self.test_dir, "sync")
+        os.makedirs(eq_dir)
+        os.makedirs(sync_dir)
+        
+        # Write config.json
+        config = {
+            "eq_dir": eq_dir,
+            "sync_dir": sync_dir,
+            "characters": ["Faugus_legends"],
+            "ui_sync_mode": "scale_position",
+            "resolution": [2560, 1440],
+            "machine_name": "desktop"
+        }
+        config_path = os.path.join(self.test_dir, "config.json")
+        with open(config_path, "w") as f:
+            json.dump(config, f)
+            
+        # Mock get_config_path
+        import eql_sync
+        old_get_config_path = eql_sync.get_config_path
+        eql_sync.get_config_path = lambda: config_path
+        
+        try:
+            # Create local character file
+            char_ini = "Faugus_legends.ini"
+            with open(os.path.join(eq_dir, char_ini), "w") as f:
+                f.write("[Socials]\nPage1=1\n")
+                
+            class MockArgs:
+                def __init__(self, dry_run=True):
+                    self.no_ui = False
+                    self.ui_mode = None
+                    self.force = False
+                    self.dry_run = dry_run
+                    
+            # Push with dry-run
+            cmd_push(MockArgs(dry_run=True))
+            
+            # Verify no files were created in sync directory
+            self.assertFalse(os.path.exists(os.path.join(sync_dir, char_ini)))
+            
+            # Now push normally to write it
+            cmd_push(MockArgs(dry_run=False))
+            self.assertTrue(os.path.exists(os.path.join(sync_dir, char_ini)))
+            
+            # Remove local file to test pulling
+            os.remove(os.path.join(eq_dir, char_ini))
+            
+            # Pull with dry-run
+            cmd_pull(MockArgs(dry_run=True))
+            # Verify file was NOT pulled
+            self.assertFalse(os.path.exists(os.path.join(eq_dir, char_ini)))
+            
+            # Pull normally
+            cmd_pull(MockArgs(dry_run=False))
+            # Verify file WAS pulled
+            self.assertTrue(os.path.exists(os.path.join(eq_dir, char_ini)))
+            
+        finally:
+            eql_sync.get_config_path = old_get_config_path
+
 if __name__ == "__main__":
     unittest.main()

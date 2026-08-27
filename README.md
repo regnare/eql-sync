@@ -39,6 +39,7 @@ python eql_sync.py push
 *   `--no-ui`: Skip UI/HUD layout sync for this run (only pushes macros/hotbars/spell slots).
 *   `--ui-mode {scale_position,scale_all,exact,none}`: Override UI sync mode temporarily.
 *   `--force`: Bypass process checks (if the game is running) and force-overwrite synced files.
+*   `--dry-run`: Simulate pushing settings without writing any files or changes.
 
 *Example (only push hotbars/macros/spell slots):*
 ```bash
@@ -56,6 +57,7 @@ python eql_sync.py pull
 *   `--no-ui`: Skip pulling/applying UI/HUD layouts for this run.
 *   `--ui-mode {scale_position,scale_all,exact,none}`: Override UI sync mode temporarily.
 *   `--force`: Bypass confirmation prompts and process checks.
+*   `--dry-run`: Simulate pulling settings without writing any local files, changes, or backups.
 
 *Example (only pull macros/hotbars/spell slots):*
 ```bash
