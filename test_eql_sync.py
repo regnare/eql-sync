@@ -334,7 +334,8 @@ SomeCamelCaseKey=Value
                     self.no_ui = False
                     self.ui_mode = None
                     self.force = False
-                    self.dry_run = dry_run
+                    self.global_dry_run = dry_run
+                    self.sub_dry_run = False
                     
             # Push with dry-run
             cmd_push(MockArgs(dry_run=True))

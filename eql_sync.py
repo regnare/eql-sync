@@ -298,7 +298,7 @@ def cmd_push(args=None):
     dry_run = False
     if args:
         force = getattr(args, "force", False)
-        dry_run = getattr(args, "dry_run", False)
+        dry_run = getattr(args, "global_dry_run", False) or getattr(args, "sub_dry_run", False)
         if getattr(args, "no_ui", False):
             ui_mode = "none"
         elif getattr(args, "ui_mode", None):
@@ -404,7 +404,7 @@ def cmd_pull(args=None):
     dry_run = False
     if args:
         force = getattr(args, "force", False)
-        dry_run = getattr(args, "dry_run", False)
+        dry_run = getattr(args, "global_dry_run", False) or getattr(args, "sub_dry_run", False)
         if getattr(args, "no_ui", False):
             ui_mode = "none"
         elif getattr(args, "ui_mode", None):
@@ -567,6 +567,7 @@ def cmd_status():
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="EverQuest Legends Sync Tool")
+    parser.add_argument("-d", "--dry-run", dest="global_dry_run", action="store_true", help="Simulate sync operations without writing any files")
     subparsers = parser.add_subparsers(dest="command", help="Subcommand to run")
     
     # init
@@ -577,14 +578,14 @@ def main():
     push_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
     push_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
     push_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
-    push_parser.add_argument("-d", "--dry-run", action="store_true", help="Simulate pushing settings without writing any files")
+    push_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate pushing settings without writing any files")
 
     # pull
     pull_parser = subparsers.add_parser("pull", help="Pull settings from sync folder")
     pull_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
     pull_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
     pull_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
-    pull_parser.add_argument("-d", "--dry-run", action="store_true", help="Simulate pulling settings without writing any files")
+    pull_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate pulling settings without writing any files")
 
     # status
     subparsers.add_parser("status", help="Show current sync status")
