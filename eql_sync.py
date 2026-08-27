@@ -577,14 +577,14 @@ def main():
     push_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
     push_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
     push_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
-    push_parser.add_argument("--dry-run", action="store_true", help="Simulate pushing settings without writing any files")
+    push_parser.add_argument("-d", "--dry-run", action="store_true", help="Simulate pushing settings without writing any files")
 
     # pull
     pull_parser = subparsers.add_parser("pull", help="Pull settings from sync folder")
     pull_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
     pull_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
     pull_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
-    pull_parser.add_argument("--dry-run", action="store_true", help="Simulate pulling settings without writing any files")
+    pull_parser.add_argument("-d", "--dry-run", action="store_true", help="Simulate pulling settings without writing any files")
 
     # status
     subparsers.add_parser("status", help="Show current sync status")
