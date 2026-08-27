@@ -160,5 +160,74 @@ SomeCamelCaseKey=Value
         self.assertNotIn("XPos = 150", raw_data)
         self.assertIn("SomeCamelCaseKey=Value", raw_data)
 
+    def test_cmd_push_pull_overrides(self):
+        import json
+        from eql_sync import cmd_push, cmd_pull
+        
+        # 1. Setup directories
+        eq_dir = os.path.join(self.test_dir, "eq")
+        sync_dir = os.path.join(self.test_dir, "sync")
+        os.makedirs(eq_dir)
+        os.makedirs(sync_dir)
+        
+        # Write config.json
+        config = {
+            "eq_dir": eq_dir,
+            "sync_dir": sync_dir,
+            "characters": ["Faugus_legends"],
+            "ui_sync_mode": "scale_position",
+            "resolution": [2560, 1440],
+            "machine_name": "desktop"
+        }
+        config_path = os.path.join(self.test_dir, "config.json")
+        with open(config_path, "w") as f:
+            json.dump(config, f)
+            
+        # Mock get_config_path
+        import eql_sync
+        old_get_config_path = eql_sync.get_config_path
+        eql_sync.get_config_path = lambda: config_path
+        
+        try:
+            # Create character files
+            char_ini = "Faugus_legends.ini"
+            ui_ini = "UI_Faugus_legends.ini"
+            
+            with open(os.path.join(eq_dir, char_ini), "w") as f:
+                f.write("[Socials]\nPage1Button1Line1=/say Hello\n")
+            with open(os.path.join(eq_dir, ui_ini), "w") as f:
+                f.write("[ChatWindow]\nXPos=100\n")
+                
+            # Define mock args
+            class MockArgs:
+                def __init__(self, no_ui=False, ui_mode=None, force=True):
+                    self.no_ui = no_ui
+                    self.ui_mode = ui_mode
+                    self.force = force
+                    
+            # 1. Test pushing with --no-ui
+            args_no_ui = MockArgs(no_ui=True)
+            cmd_push(args_no_ui)
+            
+            # Verify char.ini is in sync_dir, but UI_char.ini is NOT (since --no-ui was passed)
+            self.assertTrue(os.path.exists(os.path.join(sync_dir, char_ini)))
+            self.assertFalse(os.path.exists(os.path.join(sync_dir, ui_ini)))
+            
+            # 2. Test pushing with default (no args) -> should push both
+            cmd_push()
+            self.assertTrue(os.path.exists(os.path.join(sync_dir, ui_ini)))
+            
+            # Remove local files to test pulling
+            os.remove(os.path.join(eq_dir, char_ini))
+            os.remove(os.path.join(eq_dir, ui_ini))
+            
+            # 3. Test pulling with --no-ui
+            cmd_pull(args_no_ui)
+            self.assertTrue(os.path.exists(os.path.join(eq_dir, char_ini)))
+            self.assertFalse(os.path.exists(os.path.join(eq_dir, ui_ini)))
+            
+        finally:
+            eql_sync.get_config_path = old_get_config_path
+
 if __name__ == "__main__":
     unittest.main()

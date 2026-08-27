@@ -29,11 +29,21 @@ This generates a local `config.json` file.
 ## Usage
 
 ### Pushing local settings to the sync folder
-When you finish playing on a machine and want to save your macros, hotkeys, and UI layout:
+When you finish playing on a machine and want to save your macros, hotkeys, spell slots, and (optionally) UI layout:
 ```bash
 python eql_sync.py push
 ```
 *If the game is still running, the script will show a warning.*
+
+**Options:**
+*   `--no-ui`: Skip UI/HUD layout sync for this run (only pushes macros/hotbars/spell slots).
+*   `--ui-mode {scale_position,scale_all,exact,none}`: Override UI sync mode temporarily.
+*   `--force`: Bypass process checks (if the game is running) and force-overwrite synced files.
+
+*Example (only push hotbars/macros/spell slots):*
+```bash
+python eql_sync.py push --no-ui
+```
 
 ### Pulling settings from the sync folder
 Before you launch the game on the other machine, pull the latest changes:
@@ -41,6 +51,16 @@ Before you launch the game on the other machine, pull the latest changes:
 python eql_sync.py pull
 ```
 *This will automatically create a backup of your local files in `[EQ_Dir]/sync_backups/` before applying any changes.*
+
+**Options:**
+*   `--no-ui`: Skip pulling/applying UI/HUD layouts for this run.
+*   `--ui-mode {scale_position,scale_all,exact,none}`: Override UI sync mode temporarily.
+*   `--force`: Bypass confirmation prompts and process checks.
+
+*Example (only pull macros/hotbars/spell slots):*
+```bash
+python eql_sync.py pull --no-ui
+```
 
 ### Checking status
 You can check the modification times and current sync configuration by running:

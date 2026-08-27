@@ -46,7 +46,10 @@ def is_game_running():
         print(f"Warning: Failed to scan process list: {e}")
     return False
 
-def check_game_state_and_confirm():
+def check_game_state_and_confirm(force=False):
+    if force:
+        print("Bypassing running game checks (--force).")
+        return
     if is_game_running():
         print("\n" + "!" * 60)
         print("WARNING: EverQuest Legends process (eqgame.exe) is currently running!")
@@ -246,13 +249,22 @@ def cmd_init():
     save_config(config)
     print("\nSetup complete! You can run 'python eql_sync.py push' to sync local changes up to the shared folder.")
 
-def cmd_push():
+def cmd_push(args=None):
     config = load_config()
     eq_dir = config["eq_dir"]
     sync_dir = config["sync_dir"]
     characters = config["characters"]
-    ui_mode = config["ui_sync_mode"]
     config_res = config["resolution"]
+
+    # Handle overrides from command line arguments
+    ui_mode = config["ui_sync_mode"]
+    force = False
+    if args:
+        force = getattr(args, "force", False)
+        if getattr(args, "no_ui", False):
+            ui_mode = "none"
+        elif getattr(args, "ui_mode", None):
+            ui_mode = args.ui_mode
 
     if not os.path.exists(eq_dir):
         print(f"Error: EverQuest directory does not exist: {eq_dir}")
@@ -260,10 +272,12 @@ def cmd_push():
 
     os.makedirs(sync_dir, exist_ok=True)
     
-    check_game_state_and_confirm()
+    check_game_state_and_confirm(force=force)
     local_res = detect_resolution(eq_dir, config_res)
 
     print(f"\nPushing settings from machine '{config['machine_name']}'...")
+    if ui_mode == "none":
+        print("Note: UI layout sync is disabled/skipped.")
     
     for char in characters:
         print(f"\n--- Syncing Character: {char} ---")
@@ -281,10 +295,13 @@ def cmd_push():
                 sync_mtime = os.path.getmtime(sync_char_path)
                 if sync_mtime > local_mtime:
                     print(f"Warning: Synced file {char_ini} is newer than local file!")
-                    confirm = input("Overwrite synced file anyway? (y/N): ")
-                    if confirm.lower() != 'y':
-                        print("Skipping character settings.")
-                        continue
+                    if force:
+                        print("Forcing overwrite of synced file (--force).")
+                    else:
+                        confirm = input("Overwrite synced file anyway? (y/N): ")
+                        if confirm.lower() != 'y':
+                            print("Skipping character settings.")
+                            continue
             
             shutil.copy2(local_char_path, sync_char_path)
             print(f"Copied {char_ini} to sync folder.")
@@ -319,13 +336,22 @@ def cmd_push():
 
     print("\nPush completed successfully!")
 
-def cmd_pull():
+def cmd_pull(args=None):
     config = load_config()
     eq_dir = config["eq_dir"]
     sync_dir = config["sync_dir"]
     characters = config["characters"]
-    ui_mode = config["ui_sync_mode"]
     config_res = config["resolution"]
+
+    # Handle overrides from command line arguments
+    ui_mode = config["ui_sync_mode"]
+    force = False
+    if args:
+        force = getattr(args, "force", False)
+        if getattr(args, "no_ui", False):
+            ui_mode = "none"
+        elif getattr(args, "ui_mode", None):
+            ui_mode = args.ui_mode
 
     if not os.path.exists(sync_dir):
         print(f"Error: Shared sync directory does not exist: {sync_dir}")
@@ -335,7 +361,7 @@ def cmd_pull():
         print(f"Error: Local EverQuest directory does not exist: {eq_dir}")
         sys.exit(1)
 
-    check_game_state_and_confirm()
+    check_game_state_and_confirm(force=force)
     local_res = detect_resolution(eq_dir, config_res)
 
     print(f"\nPulling settings to machine '{config['machine_name']}'...")
@@ -354,10 +380,13 @@ def cmd_pull():
                 sync_mtime = os.path.getmtime(sync_char_path)
                 if local_mtime > sync_mtime:
                     print(f"Warning: Local file {char_ini} is newer than synced file!")
-                    confirm = input("Overwrite local changes? (y/N): ")
-                    if confirm.lower() != 'y':
-                        print("Skipping character settings pull.")
-                        continue
+                    if force:
+                        print("Forcing overwrite of local changes (--force).")
+                    else:
+                        confirm = input("Overwrite local changes? (y/N): ")
+                        if confirm.lower() != 'y':
+                            print("Skipping character settings pull.")
+                            continue
                 
                 # Backup before overwrite
                 make_backup(eq_dir, char_ini)
@@ -391,10 +420,13 @@ def cmd_pull():
                     sync_mtime = os.path.getmtime(sync_ui_path)
                     if local_mtime > sync_mtime:
                         print(f"Warning: Local UI file {ui_ini} is newer than synced file!")
-                        confirm = input("Overwrite local UI changes? (y/N): ")
-                        if confirm.lower() != 'y':
-                            print("Skipping UI pull.")
-                            continue
+                        if force:
+                            print("Forcing overwrite of local UI changes (--force).")
+                        else:
+                            confirm = input("Overwrite local UI changes? (y/N): ")
+                            if confirm.lower() != 'y':
+                                print("Skipping UI pull.")
+                                continue
                     
                     make_backup(eq_dir, ui_ini)
 
@@ -447,22 +479,45 @@ def cmd_status():
             print("    Local UI:   NOT FOUND")
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python eql_sync.py [init | push | pull | status]")
+    import argparse
+    parser = argparse.ArgumentParser(description="EverQuest Legends Sync Tool")
+    subparsers = parser.add_subparsers(dest="command", help="Subcommand to run")
+    
+    # init
+    subparsers.add_parser("init", help="Configure local settings")
+    
+    # push
+    push_parser = subparsers.add_parser("push", help="Push local settings to sync folder")
+    push_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
+    push_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
+    push_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
+
+    # pull
+    pull_parser = subparsers.add_parser("pull", help="Pull settings from sync folder")
+    pull_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
+    pull_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
+    pull_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
+
+    # status
+    subparsers.add_parser("status", help="Show current sync status")
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
         sys.exit(1)
         
-    cmd = sys.argv[1].lower()
+    cmd = args.command.lower()
     if cmd == "init":
         cmd_init()
     elif cmd == "push":
-        cmd_push()
+        cmd_push(args)
     elif cmd == "pull":
-        cmd_pull()
+        cmd_pull(args)
     elif cmd == "status":
         cmd_status()
     else:
-        print(f"Unknown command: {cmd}")
-        print("Usage: python eql_sync.py [init | push | pull | status]")
+        parser.print_help()
         sys.exit(1)
 
 if __name__ == "__main__":
