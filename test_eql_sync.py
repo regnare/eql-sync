@@ -601,5 +601,161 @@ SomeCamelCaseKey=Value
         finally:
             eql_sync.get_shell_rc_path = old_get_rc
 
+    def test_cmd_play_dry_run(self):
+        import io
+        from contextlib import redirect_stdout
+        import eql_sync
+        from eql_sync import cmd_play
+
+        class MockArgs:
+            def __init__(self):
+                self.global_dry_run = True
+                self.sub_dry_run = False
+                self.launch_command = None
+                self.force = False
+                self.no_pre_sync = False
+                self.no_post_sync = False
+                self.wait_timeout = 10
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            ret = cmd_play(MockArgs())
+        output = buf.getvalue()
+        self.assertEqual(ret, 0)
+        self.assertIn("DRY-RUN MODE", output)
+        self.assertIn("Would execute command:", output)
+        self.assertIn("Would execute post-game auto-sync", output)
+
+    def test_cmd_play_already_running_guard(self):
+        import io
+        from contextlib import redirect_stdout
+        import eql_sync
+        from eql_sync import cmd_play
+
+        old_is_running = eql_sync.is_game_running
+        eql_sync.is_game_running = lambda: True
+
+        class MockArgs:
+            def __init__(self):
+                self.global_dry_run = False
+                self.sub_dry_run = False
+                self.launch_command = None
+                self.force = False
+                self.no_pre_sync = False
+                self.no_post_sync = False
+                self.wait_timeout = 10
+
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                ret = cmd_play(MockArgs())
+            output = buf.getvalue()
+            self.assertEqual(ret, 1)
+            self.assertIn("WARNING: EverQuest Legends process (eqgame.exe) is already running!", output)
+            self.assertIn("Aborting play session", output)
+        finally:
+            eql_sync.is_game_running = old_is_running
+
+    def test_cmd_play_full_lifecycle(self):
+        import io
+        import time
+        from contextlib import redirect_stdout
+        import eql_sync
+        from eql_sync import cmd_play
+
+        old_is_running = eql_sync.is_game_running
+        old_sleep = time.sleep
+        old_popen = eql_sync.subprocess.Popen
+        old_cmd_auto = eql_sync.cmd_auto
+
+        state_iter = iter([False, True, True, False])
+        eql_sync.is_game_running = lambda: next(state_iter, False)
+        time.sleep = lambda s: None
+
+        auto_calls = []
+        eql_sync.cmd_auto = lambda args=None: auto_calls.append("auto")
+
+        popen_calls = []
+        class MockPopen:
+            def __init__(self, cmd, **kwargs):
+                popen_calls.append(cmd)
+        eql_sync.subprocess.Popen = MockPopen
+
+        class MockArgs:
+            def __init__(self):
+                self.global_dry_run = False
+                self.sub_dry_run = False
+                self.launch_command = "test-launcher"
+                self.force = False
+                self.no_pre_sync = False
+                self.no_post_sync = False
+                self.wait_timeout = 10
+
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                ret = cmd_play(MockArgs())
+            output = buf.getvalue()
+            self.assertEqual(ret, 0)
+            self.assertEqual(len(popen_calls), 1)
+            self.assertEqual(popen_calls[0], "test-launcher")
+            self.assertEqual(len(auto_calls), 2)
+            self.assertIn("Game process detected! Enjoy your session.", output)
+            self.assertIn("EverQuest (eqgame.exe) has exited.", output)
+            self.assertIn("Post-game sync complete!", output)
+        finally:
+            eql_sync.is_game_running = old_is_running
+            time.sleep = old_sleep
+            eql_sync.subprocess.Popen = old_popen
+            eql_sync.cmd_auto = old_cmd_auto
+
+    def test_cmd_play_startup_timeout(self):
+        import io
+        import time
+        from contextlib import redirect_stdout
+        import eql_sync
+        from eql_sync import cmd_play
+
+        old_is_running = eql_sync.is_game_running
+        old_sleep = time.sleep
+        old_popen = eql_sync.subprocess.Popen
+        old_cmd_auto = eql_sync.cmd_auto
+
+        eql_sync.is_game_running = lambda: False
+        time.sleep = lambda s: None
+
+        auto_calls = []
+        eql_sync.cmd_auto = lambda args=None: auto_calls.append("auto")
+
+        class MockPopen:
+            def __init__(self, cmd, **kwargs):
+                pass
+        eql_sync.subprocess.Popen = MockPopen
+
+        class MockArgs:
+            def __init__(self):
+                self.global_dry_run = False
+                self.sub_dry_run = False
+                self.launch_command = "test-launcher"
+                self.force = False
+                self.no_pre_sync = False
+                self.no_post_sync = False
+                self.wait_timeout = -1
+
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                ret = cmd_play(MockArgs())
+            output = buf.getvalue()
+            self.assertEqual(ret, 1)
+            self.assertEqual(len(auto_calls), 1)
+            self.assertIn("was not detected within", output)
+            self.assertIn("Skipping post-game auto-sync", output)
+        finally:
+            eql_sync.is_game_running = old_is_running
+            time.sleep = old_sleep
+            eql_sync.subprocess.Popen = old_popen
+            eql_sync.cmd_auto = old_cmd_auto
+
 if __name__ == "__main__":
     unittest.main()

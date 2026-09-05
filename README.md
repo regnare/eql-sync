@@ -115,6 +115,24 @@ python eql_sync.py sync
 *   **Already in sync**: Leaves files untouched.
 *   Supports `--dry-run` (`-d`) to preview all decisions safely without modifying anything.
 
+### Seamless Play Session Wrapper (`play`)
+Automates the entire gaming lifecycle with pre-game and post-game synchronization:
+```bash
+eql-sync play
+# or: python eql_sync.py play
+```
+1. **Pre-Game Sync**: Runs `auto` to pull any newer macros, hotbars, or settings from your other computer before starting.
+2. **Launches EverQuest**: Executes your platform launch command (`open -a osxEQL` on macOS, `faugus-launcher` on Linux).
+3. **Monitors Session**: Detects `eqgame.exe` in the background and monitors the session until you exit.
+4. **Post-Game Sync**: Waits 3 seconds for file buffers to flush, then runs `auto` to push your updated character settings back to the sync folder.
+
+**Options:**
+*   `-c`, `--command "..."`: Override the game launch command for this run.
+*   `--wait-timeout [seconds]`: Seconds to wait for `eqgame.exe` to start (default: 120).
+*   `--no-pre-sync`: Skip pre-game sync.
+*   `--no-post-sync`: Skip post-game sync.
+*   `-d`, `--dry-run`: Preview the play workflow without launching the game or writing files.
+
 ### Smart Backup Pruning (`prune`)
 Backups are created automatically in `sync_backups/` whenever files are modified or pulled. The built-in pruner keeps your folders tidy:
 *   **Retention**: Keeps the **10 most recent backups** per file.

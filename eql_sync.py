@@ -7,6 +7,7 @@ import datetime
 import subprocess
 import configparser
 import re
+import time
 
 CONFIG_FILENAME = "config.json"
 DEFAULT_CONFIG_DIR = os.path.expanduser("~/.config/eql-sync")
@@ -49,15 +50,23 @@ def save_config(config, target_path=None):
 
 def is_game_running():
     """Detects if eqgame.exe is running on macOS/Linux using Wine/Proton."""
+    # 1. Try pgrep (fast and clean on both Linux and macOS)
     try:
-        # Run ps aux to list all running processes
+        res = subprocess.run(["pgrep", "-i", "-f", "eqgame.exe"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    # 2. Fallback to ps aux
+    try:
         res = subprocess.run(["ps", "aux"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         lines = res.stdout.splitlines()
         for line in lines:
             if "eqgame.exe" in line.lower() and "grep" not in line.lower():
                 return True
-    except Exception as e:
-        print(f"Warning: Failed to scan process list: {e}")
+    except Exception:
+        pass
     return False
 
 def check_game_state_and_confirm(force=False):
@@ -317,17 +326,30 @@ def cmd_init():
     if not machine_name:
         machine_name = default_machine
 
+    # 7. Game Launch Command (used by 'play')
+    default_launch_cmd = "open -a osxEQL" if current_os == "darwin" else "faugus-launcher"
+    print("\nGame Launch Command:")
+    print("  Used by 'eql-sync play' to launch EverQuest after pre-game sync.")
+    if current_os == "darwin":
+        print("  macOS default: open -a osxEQL (matches Spotlight app)")
+    else:
+        print("  Linux default: faugus-launcher (or desktop shortcut command)")
+    launch_cmd_input = input(f"Enter game launch command [{default_launch_cmd}]: ").strip()
+    if not launch_cmd_input:
+        launch_cmd_input = default_launch_cmd
+
     config = {
       "eq_dir": eq_dir,
       "sync_dir": sync_dir,
       "characters": characters,
       "ui_sync_mode": ui_sync_mode,
       "resolution": resolution,
-      "machine_name": machine_name
+      "machine_name": machine_name,
+      "launch_command": launch_cmd_input
     }
     
     save_config(config)
-    print("\nSetup complete! You can run 'python eql_sync.py push' to sync local changes up to the shared folder.")
+    print("\nSetup complete! You can run 'eql-sync status', 'eql-sync auto', or 'eql-sync play'.")
 
 def find_character_configs(search_dir, char_name):
     """
@@ -608,11 +630,15 @@ def cmd_status(args=None):
     ui_mode = config.get("ui_sync_mode", "none")
     config_res = config.get("resolution", [1920, 1080])
 
+    default_cmd = "open -a osxEQL" if sys.platform == "darwin" else "faugus-launcher"
+    launch_cmd = config.get("launch_command", default_cmd)
+
     print("=== EverQuest Legends Sync Status ===")
     print(f"Machine Name:  {config.get('machine_name')}")
     print(f"Local EQ Dir:  {eq_dir}")
     print(f"Sync Dir:      {sync_dir}")
     print(f"UI Sync Mode:  {ui_mode}")
+    print(f"Launch Cmd:    {launch_cmd}")
     print(f"Config Res:    {config_res}")
     
     detected_res = detect_resolution(eq_dir, config_res)
@@ -926,6 +952,109 @@ def cmd_auto(args=None):
 
     print(f"\nAuto-sync complete! (Pushed: {pushed_count}, Pulled: {pulled_count}, In Sync: {in_sync_count})")
 
+def cmd_play(args=None):
+    config = load_config()
+    current_os = sys.platform
+    default_cmd = "open -a osxEQL" if current_os == "darwin" else "faugus-launcher"
+
+    launch_cmd = getattr(args, "launch_command", None) or config.get("launch_command") or default_cmd
+    dry_run = getattr(args, "global_dry_run", False) or getattr(args, "sub_dry_run", False)
+    force = getattr(args, "force", False)
+    no_pre_sync = getattr(args, "no_pre_sync", False)
+    no_post_sync = getattr(args, "no_post_sync", False)
+    wait_timeout = getattr(args, "wait_timeout", 120)
+
+    print("=== EverQuest Legends Session Launcher ===")
+    if dry_run:
+        print("=== DRY-RUN MODE (No changes will be written, game will not be launched) ===")
+
+    # Guard: check if game is already running
+    if is_game_running() and not dry_run:
+        print("\n" + "!" * 60)
+        print("WARNING: EverQuest Legends process (eqgame.exe) is already running!")
+        print("Cannot start a new play session while the game is active.")
+        print("!" * 60 + "\n")
+        if not force:
+            print("Aborting play session. To force anyway, use --force.")
+            return 1
+        print("Continuing anyway (--force)...")
+
+    # Step 1: Pre-game sync
+    if not no_pre_sync:
+        print("\n--- Step 1: Pre-Game Synchronization ---")
+        cmd_auto(args)
+    else:
+        print("\n--- Step 1: Pre-Game Synchronization (Skipped: --no-pre-sync) ---")
+
+    # Step 2: Launch game
+    print(f"\n--- Step 2: Launching EverQuest ---")
+    print(f"Launch command: {launch_cmd}")
+    if dry_run:
+        print(f"    [DRY-RUN] Would execute command: {launch_cmd}")
+        print(f"    [DRY-RUN] Would poll for eqgame.exe (timeout: {wait_timeout}s).")
+        print(f"    [DRY-RUN] Would monitor session until game exit.")
+        print(f"    [DRY-RUN] Would wait 3s for disk flush.")
+        print(f"    [DRY-RUN] Would execute post-game auto-sync.")
+        return 0
+
+    try:
+        subprocess.Popen(launch_cmd, shell=True)
+        print("Launcher started. Waiting for game process (eqgame.exe)...")
+    except Exception as e:
+        print(f"Error executing launch command '{launch_cmd}': {e}")
+        return 1
+
+    # Step 3: Wait for eqgame.exe to start
+    start_wait = time.time()
+    game_started = False
+    print(f"Waiting for EverQuest (eqgame.exe) to start (timeout: {wait_timeout}s)...")
+    print("Press Ctrl+C to cancel.")
+    try:
+        while time.time() - start_wait < wait_timeout:
+            if is_game_running():
+                game_started = True
+                break
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nCancelled waiting for game startup.")
+        return 0
+
+    if not game_started:
+        print(f"\nWarning: EverQuest process (eqgame.exe) was not detected within {wait_timeout} seconds.")
+        print("Game may still be starting slowly, or was cancelled in the launcher.")
+        print("Skipping post-game auto-sync to avoid syncing unintended changes.")
+        return 1
+
+    # Step 4: Monitor game session
+    print(f"\n--- Step 3: EverQuest is Active ---")
+    print("Game process detected! Enjoy your session.")
+    print("Monitoring for exit... (Keep this terminal window open)")
+    print("(Press Ctrl+C to stop monitoring without syncing)")
+
+    try:
+        while is_game_running():
+            time.sleep(2)
+    except KeyboardInterrupt:
+        print("\n\nSession monitoring interrupted by user (Ctrl+C).")
+        print("Skipping post-game auto-sync.")
+        print("You can manually sync later using: eql-sync auto")
+        return 0
+
+    # Step 5: Grace period for file flush
+    print("\nEverQuest (eqgame.exe) has exited.")
+    print("Waiting 3 seconds for file buffers to flush...")
+    time.sleep(3)
+
+    # Step 6: Post-game sync
+    if not no_post_sync:
+        print("\n--- Step 4: Post-Game Synchronization ---")
+        cmd_auto(args)
+        print("\n✨ Post-game sync complete! Your session settings are backed up and synced.")
+    else:
+        print("\n--- Step 4: Post-Game Synchronization (Skipped: --no-post-sync) ---")
+
+    return 0
+
 def cmd_prune(args=None):
     config = load_config()
     eq_dir = config["eq_dir"]
@@ -1145,6 +1274,17 @@ def main():
     prune_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate pruning without deleting files")
     prune_parser.add_argument("--max-backups", type=int, default=None, help="Maximum number of backups to keep per file (default: 10)")
     prune_parser.add_argument("--max-days", type=int, default=None, help="Maximum age in days for backups (default: 30)")
+
+    # play
+    play_parser = subparsers.add_parser("play", help="Auto-sync, launch EverQuest, monitor session, and auto-sync on exit")
+    play_parser.add_argument("-c", "--command", dest="launch_command", help="Override game launch command (e.g. 'open -a osxEQL' or 'faugus-launcher')")
+    play_parser.add_argument("--wait-timeout", type=int, default=120, help="Maximum seconds to wait for eqgame.exe to start (default: 120)")
+    play_parser.add_argument("--no-pre-sync", action="store_true", help="Skip pre-game auto-sync")
+    play_parser.add_argument("--no-post-sync", action="store_true", help="Skip post-game auto-sync")
+    play_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
+    play_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
+    play_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and start play session anyway")
+    play_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate play session without launching game or writing files")
     
     args = parser.parse_args()
     
@@ -1167,6 +1307,8 @@ def main():
         cmd_status(args)
     elif cmd == "prune":
         cmd_prune(args)
+    elif cmd == "play":
+        cmd_play(args)
     else:
         parser.print_help()
         sys.exit(1)
