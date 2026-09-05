@@ -536,16 +536,70 @@ SomeCamelCaseKey=Value
         from contextlib import redirect_stdout
         from eql_sync import cmd_install
 
+        fake_home = os.path.join(self.test_dir, "fake_home")
+        old_expanduser = os.path.expanduser
+        os.path.expanduser = lambda path: path.replace("~", fake_home)
+
         class MockArgs:
             def __init__(self, dry_run=True):
                 self.global_dry_run = dry_run
                 self.sub_dry_run = False
+                self.add_path = False
 
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            cmd_install(MockArgs(dry_run=True))
-        output = buf.getvalue()
-        self.assertIn("[DRY-RUN] Would create symlink", output)
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_install(MockArgs(dry_run=True))
+            output = buf.getvalue()
+            self.assertIn("[DRY-RUN] Would create symlink", output)
+        finally:
+            os.path.expanduser = old_expanduser
+
+    def test_shell_rc_path_detection(self):
+        from eql_sync import get_shell_rc_path
+        old_shell = os.environ.get("SHELL")
+        try:
+            os.environ["SHELL"] = "/bin/zsh"
+            self.assertTrue(get_shell_rc_path().endswith(".zshrc"))
+
+            os.environ["SHELL"] = "/usr/bin/fish"
+            self.assertTrue(get_shell_rc_path().endswith("config.fish"))
+
+            os.environ["SHELL"] = "/bin/bash"
+            rc = get_shell_rc_path()
+            self.assertTrue(rc.endswith(".bashrc") or rc.endswith(".bash_profile"))
+        finally:
+            if old_shell is not None:
+                os.environ["SHELL"] = old_shell
+            else:
+                os.environ.pop("SHELL", None)
+
+    def test_cmd_install_add_path(self):
+        import io
+        from contextlib import redirect_stdout
+        import eql_sync
+        from eql_sync import cmd_install
+
+        mock_rc = os.path.join(self.test_dir, ".mock_zshrc")
+        old_get_rc = eql_sync.get_shell_rc_path
+        eql_sync.get_shell_rc_path = lambda: mock_rc
+
+        class MockArgs:
+            def __init__(self):
+                self.global_dry_run = False
+                self.sub_dry_run = False
+                self.add_path = True
+
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                cmd_install(MockArgs())
+            self.assertTrue(os.path.exists(mock_rc))
+            with open(mock_rc) as f:
+                content = f.read()
+            self.assertIn(".local/bin", content)
+        finally:
+            eql_sync.get_shell_rc_path = old_get_rc
 
 if __name__ == "__main__":
     unittest.main()

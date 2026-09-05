@@ -954,10 +954,36 @@ def cmd_prune(args=None):
 
     print("\nPrune complete!")
 
+def get_shell_rc_path():
+    """Returns the most appropriate shell configuration file for the current user and shell."""
+    shell = os.environ.get("SHELL", "").lower()
+    home = os.path.expanduser("~")
+
+    if "zsh" in shell:
+        return os.path.join(home, ".zshrc")
+    elif "bash" in shell:
+        if sys.platform == "darwin":
+            profile = os.path.join(home, ".bash_profile")
+            if os.path.exists(profile):
+                return profile
+        return os.path.join(home, ".bashrc")
+    elif "fish" in shell:
+        return os.path.join(home, ".config", "fish", "config.fish")
+
+    # Fallback based on OS
+    if sys.platform == "darwin":
+        zshrc = os.path.join(home, ".zshrc")
+        if os.path.exists(zshrc) or "zsh" in shell:
+            return zshrc
+        return os.path.join(home, ".bash_profile")
+    return os.path.join(home, ".bashrc")
+
 def cmd_install(args=None):
     dry_run = False
+    add_path_flag = False
     if args:
         dry_run = getattr(args, "global_dry_run", False) or getattr(args, "sub_dry_run", False)
+        add_path_flag = getattr(args, "add_path", False)
 
     script_path = os.path.abspath(__file__)
     bin_dir = os.path.expanduser("~/.local/bin")
@@ -1023,14 +1049,58 @@ def cmd_install(args=None):
             except Exception as e:
                 print(f"Warning: Could not copy config to {DEFAULT_CONFIG_PATH}: {e}")
 
-    # 5. Check PATH
+    # 5. Check PATH and optionally configure shell rc
     path_dirs = [os.path.abspath(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p]
     if os.path.abspath(bin_dir) not in path_dirs:
+        rc_path = get_shell_rc_path()
+        rc_display = rc_path.replace(os.path.expanduser("~"), "~")
+        is_fish = "fish" in os.environ.get("SHELL", "").lower()
+        export_cmd = 'fish_add_path "$HOME/.local/bin"' if is_fish else 'export PATH="$HOME/.local/bin:$PATH"'
+
         print(f"\nNotice: '{bin_dir}' is not currently in your PATH.")
-        print("To run 'eql-sync' directly, add it to your shell configuration (e.g. ~/.zshrc or ~/.bashrc):")
-        print(f'  export PATH="$HOME/.local/bin:$PATH"')
+
+        already_in_rc = False
+        if os.path.exists(rc_path):
+            try:
+                with open(rc_path, "r", encoding="utf-8", errors="ignore") as f:
+                    if ".local/bin" in f.read():
+                        already_in_rc = True
+            except Exception:
+                pass
+
+        if already_in_rc:
+            print(f"'{bin_dir}' is already referenced in {rc_display}, but is not active in this session.")
+            print(f"To activate it now, run:\n  source {rc_display}")
+        else:
+            add_path = add_path_flag
+            if not add_path and sys.stdin.isatty() and not dry_run:
+                try:
+                    choice = input(f"Would you like to automatically add it to {rc_display}? (y/N): ").strip().lower()
+                    if choice == 'y':
+                        add_path = True
+                except (EOFError, KeyboardInterrupt):
+                    pass
+
+            if add_path:
+                if dry_run:
+                    print(f"    [DRY-RUN] Would append '{export_cmd}' to {rc_display}")
+                else:
+                    try:
+                        os.makedirs(os.path.dirname(rc_path), exist_ok=True)
+                        with open(rc_path, "a", encoding="utf-8") as f:
+                            f.write(f"\n# Added by eql-sync\n{export_cmd}\n")
+                        print(f"Successfully added to {rc_display}!")
+                        print(f"To activate in your current session, run:\n  source {rc_display}")
+                    except Exception as e:
+                        print(f"Warning: Could not write to {rc_display}: {e}")
+                        print(f"To add it manually, append this line to {rc_display}:\n  {export_cmd}")
+            else:
+                print(f"To add it manually, append the following line to {rc_display}:")
+                print(f"  {export_cmd}")
+                print(f"Then reload your shell with:\n  source {rc_display}")
     else:
-        print(f"\nSuccess! You can now run '{link_name}' from anywhere.")
+        print(f"\nSuccess! '{bin_dir}' is already in your PATH.")
+        print(f"You can now run '{link_name}' from anywhere.")
 
 def main():
     import argparse
@@ -1044,6 +1114,7 @@ def main():
     # install
     install_parser = subparsers.add_parser("install", help="Install eql-sync as a command in ~/.local/bin")
     install_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate installation without creating symlinks")
+    install_parser.add_argument("--add-path", action="store_true", help="Automatically add ~/.local/bin to your shell rc file without prompting")
 
     # push
     push_parser = subparsers.add_parser("push", help="Push local settings to sync folder")

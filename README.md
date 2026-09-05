@@ -35,8 +35,7 @@ This will:
 *   Make the script executable (`chmod +x`).
 *   Create symlinks `eql-sync` and `eql_sync` in `~/.local/bin/`.
 *   Migrate any local `config.json` to `~/.config/eql-sync/config.json` automatically.
-
-*(Ensure `~/.local/bin` is in your `$PATH` by adding `export PATH="$HOME/.local/bin:$PATH"` to your `~/.zshrc` or `~/.bashrc` if it isn't already).*
+*   Detect your active shell (`~/.zshrc`, `~/.bashrc`, `config.fish`), check if `~/.local/bin` is in your `$PATH`, and prompt you to automatically add it if missing (or pass `--add-path` to add it automatically without prompting).
 
 ## Usage
 
