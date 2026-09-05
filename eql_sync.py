@@ -9,15 +9,26 @@ import configparser
 import re
 
 CONFIG_FILENAME = "config.json"
+DEFAULT_CONFIG_DIR = os.path.expanduser("~/.config/eql-sync")
+DEFAULT_CONFIG_PATH = os.path.join(DEFAULT_CONFIG_DIR, CONFIG_FILENAME)
 
 def get_config_path():
-    # Look for config.json in the current working directory first,
-    # then fallback to the script's directory.
+    # 1. Primary standard path: ~/.config/eql-sync/config.json
+    if os.path.exists(DEFAULT_CONFIG_PATH):
+        return DEFAULT_CONFIG_PATH
+
+    # 2. Check current working directory for local override
     cwd_path = os.path.join(os.getcwd(), CONFIG_FILENAME)
     if os.path.exists(cwd_path):
         return cwd_path
+
+    # 3. Check script directory
     script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILENAME)
-    return script_path
+    if os.path.exists(script_path):
+        return script_path
+
+    # Default to ~/.config/eql-sync/config.json
+    return DEFAULT_CONFIG_PATH
 
 def load_config():
     path = get_config_path()
@@ -28,11 +39,13 @@ def load_config():
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_config(config):
-    path = os.path.join(os.getcwd(), CONFIG_FILENAME)
-    with open(path, "w", encoding="utf-8") as f:
+def save_config(config, target_path=None):
+    if target_path is None:
+        target_path = get_config_path()
+    os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+    with open(target_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
-    print(f"Configuration saved to: {path}")
+    print(f"Configuration saved to: {target_path}")
 
 def is_game_running():
     """Detects if eqgame.exe is running on macOS/Linux using Wine/Proton."""
@@ -246,11 +259,12 @@ def cmd_init():
     
     # Suggest paths based on OS
     current_os = sys.platform
+    username = os.environ.get("USER") or "user"
     default_eq_dir = ""
     if current_os == "darwin": # macOS
-        default_eq_dir = "/Users/ben/Library/Application Support/osxEQL/prefix/drive_c/users/Public/Daybreak Game Company/Installed Games/EverQuest Legends"
+        default_eq_dir = f"/Users/{username}/Library/Application Support/osxEQL/prefix/drive_c/users/Public/Daybreak Game Company/Installed Games/EverQuest Legends"
     else: # linux or others
-        default_eq_dir = "/mnt/games/Faugus/everquest-legends/drive_c/users/Public/Daybreak Game Company/Installed Games/EverQuest Legends"
+        default_eq_dir = f"/mnt/games/{username}/everquest-legends/drive_c/users/Public/Daybreak Game Company/Installed Games/EverQuest Legends"
 
     # 1. Local EQ Directory
     eq_dir = input(f"Enter local EverQuest installation path [{default_eq_dir}]: ").strip()
@@ -940,6 +954,84 @@ def cmd_prune(args=None):
 
     print("\nPrune complete!")
 
+def cmd_install(args=None):
+    dry_run = False
+    if args:
+        dry_run = getattr(args, "global_dry_run", False) or getattr(args, "sub_dry_run", False)
+
+    script_path = os.path.abspath(__file__)
+    bin_dir = os.path.expanduser("~/.local/bin")
+    link_name = "eql-sync"
+    link_path = os.path.join(bin_dir, link_name)
+    alt_link_name = "eql_sync"
+    alt_link_path = os.path.join(bin_dir, alt_link_name)
+
+    print("=== Installing EverQuest Legends Sync Tool ===")
+    if dry_run:
+        print("=== DRY-RUN MODE (No changes will be made) ===")
+
+    # 1. Make script executable (chmod +x)
+    if dry_run:
+        print(f"    [DRY-RUN] Would make executable (chmod +x): {script_path}")
+    else:
+        try:
+            st = os.stat(script_path)
+            os.chmod(script_path, st.st_mode | 0o111)
+            print(f"Made script executable: {script_path}")
+        except Exception as e:
+            print(f"Warning: Could not set executable permission on {script_path}: {e}")
+
+    # 2. Ensure ~/.local/bin exists
+    if dry_run:
+        print(f"    [DRY-RUN] Would ensure directory exists: {bin_dir}")
+    else:
+        os.makedirs(bin_dir, exist_ok=True)
+
+    # 3. Create symlinks (both eql-sync and eql_sync)
+    for target_link, name in [(link_path, link_name), (alt_link_path, alt_link_name)]:
+        if os.path.islink(target_link) or os.path.exists(target_link):
+            if os.path.islink(target_link) and os.path.realpath(target_link) == script_path:
+                print(f"Symlink already up to date: {target_link} -> {script_path}")
+                continue
+            if dry_run:
+                print(f"    [DRY-RUN] Would replace existing file/link at: {target_link}")
+            else:
+                try:
+                    os.unlink(target_link)
+                except Exception as e:
+                    print(f"Warning: Could not remove existing {target_link}: {e}")
+
+        if dry_run:
+            print(f"    [DRY-RUN] Would create symlink: {target_link} -> {script_path}")
+        else:
+            try:
+                os.symlink(script_path, target_link)
+                print(f"Created symlink: {target_link} -> {script_path}")
+            except Exception as e:
+                print(f"Error creating symlink {target_link}: {e}")
+
+    # 4. Migrate local config if ~/.config/eql-sync/config.json doesn't exist yet
+    legacy_config = os.path.join(os.path.dirname(script_path), CONFIG_FILENAME)
+    if os.path.exists(legacy_config) and not os.path.exists(DEFAULT_CONFIG_PATH):
+        if dry_run:
+            print(f"    [DRY-RUN] Would copy existing config from {legacy_config} to {DEFAULT_CONFIG_PATH}")
+        else:
+            try:
+                os.makedirs(DEFAULT_CONFIG_DIR, exist_ok=True)
+                shutil.copy2(legacy_config, DEFAULT_CONFIG_PATH)
+                print(f"Migrated existing config to: {DEFAULT_CONFIG_PATH}")
+            except Exception as e:
+                print(f"Warning: Could not copy config to {DEFAULT_CONFIG_PATH}: {e}")
+
+    # 5. Check PATH
+    path_dirs = [os.path.abspath(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    if os.path.abspath(bin_dir) not in path_dirs:
+        print(f"\nNotice: '{bin_dir}' is not currently in your PATH.")
+        print("To run 'eql-sync' directly, add it to your shell configuration (e.g. ~/.zshrc or ~/.bashrc):")
+        print(f'  export PATH="$HOME/.local/bin:$PATH"')
+    else:
+        print(f"\nSuccess! You can now run '{link_name}' from anywhere.")
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="EverQuest Legends Sync Tool")
@@ -949,6 +1041,10 @@ def main():
     # init
     subparsers.add_parser("init", help="Configure local settings")
     
+    # install
+    install_parser = subparsers.add_parser("install", help="Install eql-sync as a command in ~/.local/bin")
+    install_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate installation without creating symlinks")
+
     # push
     push_parser = subparsers.add_parser("push", help="Push local settings to sync folder")
     push_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
@@ -988,6 +1084,8 @@ def main():
     cmd = args.command.lower()
     if cmd == "init":
         cmd_init()
+    elif cmd == "install":
+        cmd_install(args)
     elif cmd == "push":
         cmd_push(args)
     elif cmd == "pull":

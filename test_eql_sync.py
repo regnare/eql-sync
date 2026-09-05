@@ -505,5 +505,47 @@ SomeCamelCaseKey=Value
         finally:
             eql_sync.get_config_path = old_get_config_path
 
+    def test_config_path_precedence(self):
+        import eql_sync
+        fake_default = os.path.join(self.test_dir, "default_config.json")
+        fake_cwd = os.path.join(self.test_dir, "cwd_config.json")
+        with open(fake_default, "w") as f:
+            f.write("{}")
+        with open(fake_cwd, "w") as f:
+            f.write("{}")
+
+        orig_default = eql_sync.DEFAULT_CONFIG_PATH
+        orig_cwd = os.getcwd
+        orig_filename = eql_sync.CONFIG_FILENAME
+        try:
+            eql_sync.DEFAULT_CONFIG_PATH = fake_default
+            self.assertEqual(eql_sync.get_config_path(), fake_default)
+            
+            # If default doesn't exist, fallback to cwd
+            eql_sync.DEFAULT_CONFIG_PATH = os.path.join(self.test_dir, "nonexistent.json")
+            os.getcwd = lambda: self.test_dir
+            eql_sync.CONFIG_FILENAME = "cwd_config.json"
+            self.assertEqual(eql_sync.get_config_path(), fake_cwd)
+        finally:
+            eql_sync.DEFAULT_CONFIG_PATH = orig_default
+            eql_sync.CONFIG_FILENAME = orig_filename
+            os.getcwd = orig_cwd
+
+    def test_cmd_install_dry_run(self):
+        import io
+        from contextlib import redirect_stdout
+        from eql_sync import cmd_install
+
+        class MockArgs:
+            def __init__(self, dry_run=True):
+                self.global_dry_run = dry_run
+                self.sub_dry_run = False
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cmd_install(MockArgs(dry_run=True))
+        output = buf.getvalue()
+        self.assertIn("[DRY-RUN] Would create symlink", output)
+
 if __name__ == "__main__":
     unittest.main()

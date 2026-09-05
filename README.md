@@ -24,14 +24,27 @@ This will guide you through entering:
 *   **Resolution Fallback**: Default resolution if `eqclient.ini` can't be parsed.
 *   **Machine Name**: E.g. `desktop` or `macbook`.
 
-This generates a local `config.json` file.
+Configuration is saved to `~/.config/eql-sync/config.json`.
+
+### Optional: Installing as a global command (`install`)
+To run `eql-sync` from any directory without specifying the script path, run:
+```bash
+./eql_sync.py install
+```
+This will:
+*   Make the script executable (`chmod +x`).
+*   Create symlinks `eql-sync` and `eql_sync` in `~/.local/bin/`.
+*   Migrate any local `config.json` to `~/.config/eql-sync/config.json` automatically.
+
+*(Ensure `~/.local/bin` is in your `$PATH` by adding `export PATH="$HOME/.local/bin:$PATH"` to your `~/.zshrc` or `~/.bashrc` if it isn't already).*
 
 ## Usage
 
 ### Pushing local settings to the sync folder
 When you finish playing on a machine and want to save your macros, hotkeys, spell slots, and (optionally) UI layout:
 ```bash
-python eql_sync.py push
+eql-sync push
+# or: python eql_sync.py push
 ```
 *If the game is still running, the script will show a warning.*
 
