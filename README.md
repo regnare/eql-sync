@@ -64,11 +64,57 @@ python eql_sync.py pull
 python eql_sync.py pull --no-ui
 ```
 
-### Checking status
-You can check the modification times and current sync configuration by running:
+### Checking status (`status` / `check`)
+Inspect timestamps side-by-side to see whether your local files or shared sync files are newer, along with a recommendation on whether to push or pull:
 ```bash
 python eql_sync.py status
+# or
+python eql_sync.py check
 ```
+
+Example output:
+```text
+--- Character: Regnare ---
+  Profile: Regnare_freeport_LO1
+    Settings/Macros (Regnare_freeport_LO1.ini):
+      Local:  2026-09-04 17:47:58
+      Sync:   2026-09-04 17:47:58
+      Status: [IN SYNC]
+  Profile: Regnare_freeport_LO2
+    Settings/Macros (Regnare_freeport_LO2.ini):
+      Local:  2026-09-05 13:20:00
+      Sync:   2026-09-01 16:20:16
+      Status: [LOCAL NEWER -> PUSH RECOMMENDED]
+
+=== Summary Recommendation ===
+-> Local files are newer (1 file(s) to push).
+   Recommended command: ./eql_sync.py push
+```
+
+### Intelligent Auto-Sync (`auto` / `sync`)
+Automatically compares file modification times on a per-profile basis and pushes or pulls in the correct direction:
+```bash
+python eql_sync.py auto
+# or
+python eql_sync.py sync
+```
+*   **Local is newer**: Backs up the sync copy in `[Sync_Dir]/sync_backups/` and pushes local $\to$ sync.
+*   **Sync is newer**: Backs up your local file in `[EQ_Dir]/sync_backups/` and pulls sync $\to$ local.
+*   **Already in sync**: Leaves files untouched.
+*   Supports `--dry-run` (`-d`) to preview all decisions safely without modifying anything.
+
+### Smart Backup Pruning (`prune`)
+Backups are created automatically in `sync_backups/` whenever files are modified or pulled. The built-in pruner keeps your folders tidy:
+*   **Retention**: Keeps the **10 most recent backups** per file.
+*   **Safety rule**: Backups older than **30 days** are removed, but a minimum of **3 most recent backups** are always preserved.
+*   Pruning runs automatically during backups, or you can trigger it manually:
+```bash
+python eql_sync.py prune
+```
+Options:
+*   `--max-backups [N]`: Customize the number of backups kept per file (default: 10).
+*   `--max-days [N]`: Customize maximum age in days (default: 30).
+*   `-d`, `--dry-run`: Preview what would be deleted without removing files.
 
 ## How Resolution Scaling Works
 EverQuest UI coordinates are stored in absolute pixels in `UI_[CharacterName]_[ServerName].ini`.

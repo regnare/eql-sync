@@ -6,6 +6,7 @@ import shutil
 import datetime
 import subprocess
 import configparser
+import re
 
 CONFIG_FILENAME = "config.json"
 
@@ -102,22 +103,84 @@ def detect_resolution(eq_dir, config_resolution):
     
     return config_resolution
 
-def make_backup(eq_dir, filename, dry_run=False):
-    """Creates a local timestamped backup of a file in the sync_backups folder."""
-    src = os.path.join(eq_dir, filename)
+def prune_backups(backup_dir, max_backups=10, max_days=30, dry_run=False):
+    """
+    Prunes old backup files in backup_dir:
+    - Retains up to max_backups most recent backups per original filename.
+    - Prunes backups older than max_days, guaranteeing at least 3 most recent backups remain.
+    """
+    if not os.path.isdir(backup_dir):
+        return []
+
+    bak_pattern = re.compile(r"^(.*?)\.(\d{8}_\d{6})\.bak$")
+    now = datetime.datetime.now()
+    cutoff_time = now - datetime.timedelta(days=max_days)
+
+    grouped_backups = {}
+    try:
+        entries = sorted(os.listdir(backup_dir))
+    except Exception:
+        return []
+
+    for entry in entries:
+        match = bak_pattern.match(entry)
+        if match:
+            orig_name = match.group(1)
+            time_str = match.group(2)
+            try:
+                dt = datetime.datetime.strptime(time_str, "%Y%m%d_%H%M%S")
+            except ValueError:
+                dt = datetime.datetime.fromtimestamp(os.path.getmtime(os.path.join(backup_dir, entry)))
+            grouped_backups.setdefault(orig_name, []).append((dt, entry))
+
+    pruned = []
+    for orig_name, backups in grouped_backups.items():
+        # Sort descending by timestamp (newest first)
+        backups.sort(key=lambda x: x[0], reverse=True)
+
+        for idx, (dt, entry) in enumerate(backups):
+            file_path = os.path.join(backup_dir, entry)
+            should_prune = False
+            reason = ""
+
+            if idx >= max_backups:
+                should_prune = True
+                reason = f"exceeds retention count of {max_backups}"
+            elif idx >= 3 and dt < cutoff_time:
+                should_prune = True
+                reason = f"older than {max_days} days"
+
+            if should_prune:
+                pruned.append(entry)
+                if dry_run:
+                    print(f"    [DRY-RUN] Would prune old backup ({reason}): {entry}")
+                else:
+                    try:
+                        os.remove(file_path)
+                        print(f"    Pruned old backup ({reason}): {entry}")
+                    except Exception as e:
+                        print(f"    Warning: Could not remove {entry}: {e}")
+
+    return pruned
+
+def make_backup(directory, filename, dry_run=False, max_backups=10, max_days=30):
+    """Creates a timestamped backup of a file in the sync_backups folder of directory and prunes old ones."""
+    src = os.path.join(directory, filename)
     if not os.path.exists(src):
         return
     
-    backup_dir = os.path.join(eq_dir, "sync_backups")
+    backup_dir = os.path.join(directory, "sync_backups")
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dst = os.path.join(backup_dir, f"{filename}.{timestamp}.bak")
     if dry_run:
         print(f"    [DRY-RUN] Would create backup of {filename} at {dst}")
+        prune_backups(backup_dir, max_backups=max_backups, max_days=max_days, dry_run=True)
         return
         
     os.makedirs(backup_dir, exist_ok=True)
     shutil.copy2(src, dst)
     print(f"Backup created: {dst}")
+    prune_backups(backup_dir, max_backups=max_backups, max_days=max_days, dry_run=False)
 
 def load_ini(file_path):
     parser = configparser.ConfigParser(strict=False, interpolation=None)
@@ -523,46 +586,359 @@ def cmd_pull(args=None):
 
     print("\nPull completed successfully!")
 
-def cmd_status():
+def cmd_status(args=None):
     config = load_config()
+    eq_dir = config["eq_dir"]
+    sync_dir = config["sync_dir"]
+    characters = config.get("characters", [])
+    ui_mode = config.get("ui_sync_mode", "none")
+    config_res = config.get("resolution", [1920, 1080])
+
     print("=== EverQuest Legends Sync Status ===")
     print(f"Machine Name:  {config.get('machine_name')}")
-    print(f"Local EQ Dir:  {config.get('eq_dir')}")
-    print(f"Sync Dir:      {config.get('sync_dir')}")
-    print(f"UI Sync Mode:  {config.get('ui_sync_mode')}")
-    print(f"Config Res:    {config.get('resolution')}")
+    print(f"Local EQ Dir:  {eq_dir}")
+    print(f"Sync Dir:      {sync_dir}")
+    print(f"UI Sync Mode:  {ui_mode}")
+    print(f"Config Res:    {config_res}")
     
-    eq_dir = config["eq_dir"]
-    detected_res = detect_resolution(eq_dir, config["resolution"])
+    detected_res = detect_resolution(eq_dir, config_res)
     print(f"Detected Res:  {detected_res[0]}x{detected_res[1]}")
-    
-    print("\nCharacters Syncing:")
-    for char in config.get("characters", []):
-        print(f"  - {char}")
-        # Search both local and sync dir to list status of all profiles
-        char_configs = find_character_configs(eq_dir, char)
-        if not char_configs:
-            char_configs = find_character_configs(sync_dir, char)
-            
-        if not char_configs:
-            print("    Local/Sync profile: NOT FOUND")
-            continue
-            
-        for config_name in char_configs:
-            print(f"    Profile: {config_name}")
-            char_path = os.path.join(eq_dir, f"{config_name}.ini")
-            if os.path.exists(char_path):
-                local_time = datetime.datetime.fromtimestamp(os.path.getmtime(char_path)).isoformat()
-                print(f"      Local .ini modified: {local_time}")
-            else:
-                print("      Local .ini: NOT FOUND")
 
-            ui_path = os.path.join(eq_dir, f"UI_{config_name}.ini")
-            if os.path.exists(ui_path):
-                local_time = datetime.datetime.fromtimestamp(os.path.getmtime(ui_path)).isoformat()
-                print(f"      Local UI modified:   {local_time}")
-            else:
-                print("      Local UI:   NOT FOUND")
+    if not os.path.exists(eq_dir):
+        print(f"\nError: Local EverQuest directory does not exist: {eq_dir}")
+        return
+    if not os.path.exists(sync_dir):
+        print(f"\nWarning: Shared sync directory does not exist: {sync_dir}")
+
+    needs_push = 0
+    needs_pull = 0
+    in_sync_count = 0
+
+    print("\nCharacters Syncing:")
+    for char in characters:
+        print(f"\n--- Character: {char} ---")
+        local_configs = find_character_configs(eq_dir, char)
+        sync_configs = find_character_configs(sync_dir, char) if os.path.exists(sync_dir) else []
+        all_configs = sorted(list(set(local_configs + sync_configs)))
+
+        if not all_configs:
+            print("  No configuration files found in local or sync directory.")
+            continue
+
+        for config_name in all_configs:
+            print(f"  Profile: {config_name}")
+
+            def compare_file(filename, desc):
+                nonlocal needs_push, needs_pull, in_sync_count
+                local_path = os.path.join(eq_dir, filename)
+                sync_path = os.path.join(sync_dir, filename)
+
+                local_exists = os.path.exists(local_path)
+                sync_exists = os.path.exists(sync_path)
+
+                local_str = "NOT FOUND"
+                sync_str = "NOT FOUND"
+                status_tag = ""
+
+                if local_exists:
+                    local_mtime = os.path.getmtime(local_path)
+                    local_str = datetime.datetime.fromtimestamp(local_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                if sync_exists:
+                    sync_mtime = os.path.getmtime(sync_path)
+                    sync_str = datetime.datetime.fromtimestamp(sync_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+                if local_exists and sync_exists:
+                    diff = local_mtime - sync_mtime
+                    if abs(diff) <= 1.0:
+                        status_tag = "[IN SYNC]"
+                        in_sync_count += 1
+                    elif diff > 1.0:
+                        status_tag = "[LOCAL NEWER -> PUSH RECOMMENDED]"
+                        needs_push += 1
+                    else:
+                        status_tag = "[SYNC NEWER -> PULL RECOMMENDED]"
+                        needs_pull += 1
+                elif local_exists and not sync_exists:
+                    status_tag = "[LOCAL ONLY -> PUSH TO SHARE]"
+                    needs_push += 1
+                elif not local_exists and sync_exists:
+                    status_tag = "[SYNC ONLY -> PULL TO LOCAL]"
+                    needs_pull += 1
+                else:
+                    status_tag = "[MISSING]"
+
+                print(f"    {desc} ({filename}):")
+                print(f"      Local:  {local_str}")
+                print(f"      Sync:   {sync_str}")
+                print(f"      Status: {status_tag}")
+
+            # 1. Compare character options/macros/spell slots
+            char_ini = f"{config_name}.ini"
+            compare_file(char_ini, "Settings/Macros")
+
+            # 2. Compare UI layout (if applicable)
+            if ui_mode != "none":
+                ui_ini = f"UI_{config_name}.ini"
+                compare_file(ui_ini, "UI Layout")
+
+    # Overall recommendation
+    print("\n=== Summary Recommendation ===")
+    if needs_push > 0 and needs_pull == 0:
+        print(f"-> Local files are newer ({needs_push} file(s) to push).")
+        print("   Recommended command: ./eql_sync.py push")
+    elif needs_pull > 0 and needs_push == 0:
+        print(f"-> Synced files are newer ({needs_pull} file(s) to pull).")
+        print("   Recommended command: ./eql_sync.py pull")
+    elif needs_push > 0 and needs_pull > 0:
+        print(f"-> Mixed states detected: {needs_push} file(s) to push, {needs_pull} file(s) to pull.")
+        print("   Recommended command: ./eql_sync.py auto  (syncs each file based on newest timestamp)")
+    elif in_sync_count > 0 and needs_push == 0 and needs_pull == 0:
+        print("-> All character files are in sync! No action needed.")
+    else:
+        print("-> No character files found to compare.")
+
+def cmd_auto(args=None):
+    config = load_config()
+    eq_dir = config["eq_dir"]
+    sync_dir = config["sync_dir"]
+    characters = config.get("characters", [])
+    config_res = config.get("resolution", [1920, 1080])
+
+    ui_mode = config.get("ui_sync_mode", "scale_position")
+    force = False
+    dry_run = False
+    if args:
+        force = getattr(args, "force", False)
+        dry_run = getattr(args, "global_dry_run", False) or getattr(args, "sub_dry_run", False)
+        if getattr(args, "no_ui", False):
+            ui_mode = "none"
+        elif getattr(args, "ui_mode", None):
+            ui_mode = args.ui_mode
+
+    if not os.path.exists(eq_dir):
+        print(f"Error: Local EverQuest directory does not exist: {eq_dir}")
+        sys.exit(1)
+
+    if not dry_run:
+        os.makedirs(sync_dir, exist_ok=True)
+
+    check_game_state_and_confirm(force=(force or dry_run))
+    local_res = detect_resolution(eq_dir, config_res)
+
+    if dry_run:
+        print("\n=== DRY-RUN MODE (No changes will be written) ===")
+
+    print(f"\nAuto-syncing machine '{config.get('machine_name')}' with shared folder...")
+    if ui_mode == "none":
+        print("Note: UI layout sync is disabled/skipped.")
+
+    max_backups = config.get("backup_retention", 10)
+    max_days = config.get("backup_retention_days", 30)
+
+    pushed_count = 0
+    pulled_count = 0
+    in_sync_count = 0
+
+    for char in characters:
+        print(f"\n--- Checking Character: {char} ---")
+        local_configs = find_character_configs(eq_dir, char)
+        sync_configs = find_character_configs(sync_dir, char) if os.path.exists(sync_dir) else []
+        all_configs = sorted(list(set(local_configs + sync_configs)))
+
+        if not all_configs:
+            print(f"Warning: No configuration files found matching '{char}'.")
+            continue
+
+        for config_name in all_configs:
+            print(f"  Profile: {config_name}")
+
+            # 1. Character options & macros ({config_name}.ini)
+            char_ini = f"{config_name}.ini"
+            local_char_path = os.path.join(eq_dir, char_ini)
+            sync_char_path = os.path.join(sync_dir, char_ini)
+
+            local_exists = os.path.exists(local_char_path)
+            sync_exists = os.path.exists(sync_char_path)
+
+            if local_exists and sync_exists:
+                local_mtime = os.path.getmtime(local_char_path)
+                sync_mtime = os.path.getmtime(sync_char_path)
+                diff = local_mtime - sync_mtime
+
+                if abs(diff) <= 1.0:
+                    print(f"    [IN SYNC] {char_ini} is already up to date.")
+                    in_sync_count += 1
+                elif diff > 1.0:
+                    # Local is newer -> Push to sync folder
+                    print(f"    [AUTO-PUSH] Local {char_ini} is newer -> Updating sync folder...")
+                    make_backup(sync_dir, char_ini, dry_run=dry_run, max_backups=max_backups, max_days=max_days)
+                    if dry_run:
+                        print(f"    [DRY-RUN] Would copy local {char_ini} to sync folder.")
+                    else:
+                        shutil.copy2(local_char_path, sync_char_path)
+                        print(f"    Copied {char_ini} to sync folder.")
+                    pushed_count += 1
+                else:
+                    # Sync is newer -> Pull to local EQ folder
+                    print(f"    [AUTO-PULL] Synced {char_ini} is newer -> Updating local EQ folder...")
+                    make_backup(eq_dir, char_ini, dry_run=dry_run, max_backups=max_backups, max_days=max_days)
+                    if dry_run:
+                        print(f"    [DRY-RUN] Would update local {char_ini} from sync folder.")
+                    else:
+                        shutil.copy2(sync_char_path, local_char_path)
+                        print(f"    Updated local {char_ini} from sync folder.")
+                    pulled_count += 1
+
+            elif local_exists and not sync_exists:
+                print(f"    [AUTO-PUSH] {char_ini} only exists locally -> Pushing to sync folder...")
+                if dry_run:
+                    print(f"    [DRY-RUN] Would copy {char_ini} to sync folder.")
+                else:
+                    shutil.copy2(local_char_path, sync_char_path)
+                    print(f"    Copied {char_ini} to sync folder.")
+                pushed_count += 1
+
+            elif not local_exists and sync_exists:
+                print(f"    [AUTO-PULL] {char_ini} only exists in sync folder -> Pulling to local folder...")
+                if dry_run:
+                    print(f"    [DRY-RUN] Would update local {char_ini} from sync folder.")
+                else:
+                    shutil.copy2(sync_char_path, local_char_path)
+                    print(f"    Updated local {char_ini} from sync folder.")
+                pulled_count += 1
+
+            # 2. UI options & layout (UI_{config_name}.ini)
+            if ui_mode != "none":
+                ui_ini = f"UI_{config_name}.ini"
+                local_ui_path = os.path.join(eq_dir, ui_ini)
+                sync_ui_path = os.path.join(sync_dir, ui_ini)
+                sync_meta_path = os.path.join(sync_dir, f"UI_{config_name}.meta.json")
+
+                local_ui_exists = os.path.exists(local_ui_path)
+                sync_ui_exists = os.path.exists(sync_ui_path)
+
+                if local_ui_exists and sync_ui_exists:
+                    local_ui_mtime = os.path.getmtime(local_ui_path)
+                    sync_ui_mtime = os.path.getmtime(sync_ui_path)
+                    diff_ui = local_ui_mtime - sync_ui_mtime
+
+                    if abs(diff_ui) <= 1.0:
+                        print(f"    [IN SYNC] {ui_ini} is already up to date.")
+                    elif diff_ui > 1.0:
+                        # Local UI is newer -> Push
+                        print(f"    [AUTO-PUSH] Local {ui_ini} is newer -> Updating sync folder...")
+                        make_backup(sync_dir, ui_ini, dry_run=dry_run, max_backups=max_backups, max_days=max_days)
+                        if dry_run:
+                            print(f"    [DRY-RUN] Would copy {ui_ini} to sync folder.")
+                            print(f"    [DRY-RUN] Would write layout metadata: {sync_meta_path}")
+                        else:
+                            shutil.copy2(local_ui_path, sync_ui_path)
+                            meta = {
+                                "source_machine": config.get("machine_name"),
+                                "resolution": local_res,
+                                "timestamp": datetime.datetime.now().isoformat()
+                            }
+                            with open(sync_meta_path, "w", encoding="utf-8") as mf:
+                                json.dump(meta, mf, indent=2)
+                            print(f"    Saved layout and metadata to sync folder.")
+                    else:
+                        # Sync UI is newer -> Pull
+                        print(f"    [AUTO-PULL] Synced {ui_ini} is newer -> Updating local EQ folder...")
+                        src_res = local_res
+                        if os.path.exists(sync_meta_path):
+                            try:
+                                with open(sync_meta_path, "r", encoding="utf-8") as mf:
+                                    meta_data = json.load(mf)
+                                    src_res = meta_data.get("resolution", local_res)
+                            except Exception as e:
+                                print(f"    Warning: Failed to parse metadata file: {e}")
+
+                        make_backup(eq_dir, ui_ini, dry_run=dry_run, max_backups=max_backups, max_days=max_days)
+                        if ui_mode in ("scale_position", "scale_all") and src_res != local_res:
+                            if dry_run:
+                                print(f"    [DRY-RUN] Would translate coordinates from {src_res[0]}x{src_res[1]} -> {local_res[0]}x{local_res[1]} and save to {ui_ini}")
+                            else:
+                                print(f"    Translating coordinates from {src_res[0]}x{src_res[1]} -> {local_res[0]}x{local_res[1]} (Mode: {ui_mode})...")
+                                ui_config = load_ini(sync_ui_path)
+                                scaled_config = scale_ui_coordinates(ui_config, src_res, local_res, ui_mode)
+                                save_ini(scaled_config, local_ui_path)
+                                print(f"    Updated and scaled local {ui_ini}")
+                        else:
+                            if dry_run:
+                                print(f"    [DRY-RUN] Would update local {ui_ini} (Exact copy)")
+                            else:
+                                shutil.copy2(sync_ui_path, local_ui_path)
+                                print(f"    Updated local {ui_ini} (Exact copy)")
+
+                elif local_ui_exists and not sync_ui_exists:
+                    print(f"    [AUTO-PUSH] {ui_ini} only exists locally -> Pushing to sync folder...")
+                    if dry_run:
+                        print(f"    [DRY-RUN] Would copy {ui_ini} to sync folder.")
+                    else:
+                        shutil.copy2(local_ui_path, sync_ui_path)
+                        meta = {
+                            "source_machine": config.get("machine_name"),
+                            "resolution": local_res,
+                            "timestamp": datetime.datetime.now().isoformat()
+                        }
+                        with open(sync_meta_path, "w", encoding="utf-8") as mf:
+                            json.dump(meta, mf, indent=2)
+                        print(f"    Saved {ui_ini} to sync folder.")
+
+                elif not local_ui_exists and sync_ui_exists:
+                    print(f"    [AUTO-PULL] {ui_ini} only exists in sync folder -> Pulling to local folder...")
+                    src_res = local_res
+                    if os.path.exists(sync_meta_path):
+                        try:
+                            with open(sync_meta_path, "r", encoding="utf-8") as mf:
+                                meta_data = json.load(mf)
+                                src_res = meta_data.get("resolution", local_res)
+                        except Exception:
+                            pass
+                    if ui_mode in ("scale_position", "scale_all") and src_res != local_res:
+                        if dry_run:
+                            print(f"    [DRY-RUN] Would scale and update local {ui_ini}")
+                        else:
+                            ui_config = load_ini(sync_ui_path)
+                            scaled_config = scale_ui_coordinates(ui_config, src_res, local_res, ui_mode)
+                            save_ini(scaled_config, local_ui_path)
+                            print(f"    Updated and scaled local {ui_ini}")
+                    else:
+                        if dry_run:
+                            print(f"    [DRY-RUN] Would copy {ui_ini} to local folder.")
+                        else:
+                            shutil.copy2(sync_ui_path, local_ui_path)
+                            print(f"    Updated local {ui_ini} (Exact copy)")
+
+    print(f"\nAuto-sync complete! (Pushed: {pushed_count}, Pulled: {pulled_count}, In Sync: {in_sync_count})")
+
+def cmd_prune(args=None):
+    config = load_config()
+    eq_dir = config["eq_dir"]
+    sync_dir = config["sync_dir"]
+    dry_run = False
+    max_backups = config.get("backup_retention", 10)
+    max_days = config.get("backup_retention_days", 30)
+
+    if args:
+        dry_run = getattr(args, "global_dry_run", False) or getattr(args, "sub_dry_run", False)
+        if getattr(args, "max_backups", None) is not None:
+            max_backups = args.max_backups
+        if getattr(args, "max_days", None) is not None:
+            max_days = args.max_days
+
+    print("=== Pruning Old Backups ===")
+    print(f"Retention limit: {max_backups} backups per file (max age: {max_days} days)")
+    if dry_run:
+        print("=== DRY-RUN MODE (No files will be deleted) ===")
+
+    print(f"\nLocal EQ backups ({os.path.join(eq_dir, 'sync_backups')}):")
+    prune_backups(os.path.join(eq_dir, "sync_backups"), max_backups=max_backups, max_days=max_days, dry_run=dry_run)
+
+    print(f"\nShared sync backups ({os.path.join(sync_dir, 'sync_backups')}):")
+    prune_backups(os.path.join(sync_dir, "sync_backups"), max_backups=max_backups, max_days=max_days, dry_run=dry_run)
+
+    print("\nPrune complete!")
 
 def main():
     import argparse
@@ -587,8 +963,21 @@ def main():
     pull_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
     pull_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate pulling settings without writing any files")
 
-    # status
-    subparsers.add_parser("status", help="Show current sync status")
+    # auto / sync
+    auto_parser = subparsers.add_parser("auto", aliases=["sync"], help="Intelligently push or pull each file based on newest timestamps")
+    auto_parser.add_argument("--no-ui", action="store_true", help="Skip UI layout sync for this run")
+    auto_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
+    auto_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and confirmation prompts")
+    auto_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate auto-sync without writing any files")
+
+    # status / check
+    subparsers.add_parser("status", aliases=["check"], help="Show current sync status and compare file timestamps")
+
+    # prune
+    prune_parser = subparsers.add_parser("prune", help="Prune old backup files in local and sync folders")
+    prune_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate pruning without deleting files")
+    prune_parser.add_argument("--max-backups", type=int, default=None, help="Maximum number of backups to keep per file (default: 10)")
+    prune_parser.add_argument("--max-days", type=int, default=None, help="Maximum age in days for backups (default: 30)")
     
     args = parser.parse_args()
     
@@ -603,8 +992,12 @@ def main():
         cmd_push(args)
     elif cmd == "pull":
         cmd_pull(args)
-    elif cmd == "status":
-        cmd_status()
+    elif cmd in ("auto", "sync"):
+        cmd_auto(args)
+    elif cmd in ("status", "check"):
+        cmd_status(args)
+    elif cmd == "prune":
+        cmd_prune(args)
     else:
         parser.print_help()
         sys.exit(1)

@@ -363,5 +363,147 @@ SomeCamelCaseKey=Value
         finally:
             eql_sync.get_config_path = old_get_config_path
 
+    def test_prune_backups(self):
+        import datetime
+        from eql_sync import prune_backups
+        backup_dir = os.path.join(self.test_dir, "test_backups")
+        os.makedirs(backup_dir)
+
+        now = datetime.datetime.now()
+        # Create 15 backups: 1 day old to 15 days old (all within 30-day window)
+        for i in range(1, 16):
+            dt = now - datetime.timedelta(days=i)
+            fname = f"Regnare_freeport_LO1.ini.{dt.strftime('%Y%m%d_%H%M%S')}.bak"
+            with open(os.path.join(backup_dir, fname), "w") as f:
+                f.write(f"Backup {i}\n")
+
+        # Dry run should not delete any files
+        pruned_dry = prune_backups(backup_dir, max_backups=10, max_days=30, dry_run=True)
+        self.assertEqual(len(pruned_dry), 5)
+        self.assertEqual(len(os.listdir(backup_dir)), 15)
+
+        # Actual run should prune 5 oldest, keeping 10 newest (days 1 to 10)
+        pruned = prune_backups(backup_dir, max_backups=10, max_days=30, dry_run=False)
+        self.assertEqual(len(pruned), 5)
+        remaining = os.listdir(backup_dir)
+        self.assertEqual(len(remaining), 10)
+
+        # Add a 45-day-old backup to test age-based pruning
+        old_dt = now - datetime.timedelta(days=45)
+        old_fname = f"Regnare_freeport_LO1.ini.{old_dt.strftime('%Y%m%d_%H%M%S')}.bak"
+        with open(os.path.join(backup_dir, old_fname), "w") as f:
+            f.write("Old backup\n")
+
+        # Running prune with max_backups=15 should prune the 45-day-old file
+        pruned_age = prune_backups(backup_dir, max_backups=15, max_days=30, dry_run=False)
+        self.assertEqual(pruned_age, [old_fname])
+        self.assertNotIn(old_fname, os.listdir(backup_dir))
+
+    def test_cmd_status_and_auto_sync(self):
+        import io
+        import json
+        import time
+        from contextlib import redirect_stdout
+        from eql_sync import cmd_status, cmd_auto
+
+        eq_dir = os.path.join(self.test_dir, "auto_eq")
+        sync_dir = os.path.join(self.test_dir, "auto_sync")
+        os.makedirs(eq_dir)
+        os.makedirs(sync_dir)
+
+        config = {
+            "eq_dir": eq_dir,
+            "sync_dir": sync_dir,
+            "characters": ["Regnare"],
+            "ui_sync_mode": "none",
+            "resolution": [2560, 1440],
+            "machine_name": "desktop"
+        }
+        config_path = os.path.join(self.test_dir, "auto_config.json")
+        with open(config_path, "w") as f:
+            json.dump(config, f)
+
+        import eql_sync
+        old_get_config_path = eql_sync.get_config_path
+        eql_sync.get_config_path = lambda: config_path
+
+        try:
+            # Profile 1: Local is newer
+            p1_local = os.path.join(eq_dir, "Regnare_freeport_LO1.ini")
+            p1_sync = os.path.join(sync_dir, "Regnare_freeport_LO1.ini")
+            with open(p1_sync, "w") as f:
+                f.write("LO1 old sync content\n")
+            time.sleep(1.1)
+            with open(p1_local, "w") as f:
+                f.write("LO1 new local content\n")
+
+            # Profile 2: Sync is newer
+            p2_local = os.path.join(eq_dir, "Regnare_freeport_LO2.ini")
+            p2_sync = os.path.join(sync_dir, "Regnare_freeport_LO2.ini")
+            with open(p2_local, "w") as f:
+                f.write("LO2 old local content\n")
+            time.sleep(1.1)
+            with open(p2_sync, "w") as f:
+                f.write("LO2 new sync content\n")
+
+            # Test cmd_status output
+            status_buf = io.StringIO()
+            with redirect_stdout(status_buf):
+                cmd_status()
+            status_output = status_buf.getvalue()
+
+            self.assertIn("LOCAL NEWER -> PUSH RECOMMENDED", status_output)
+            self.assertIn("SYNC NEWER -> PULL RECOMMENDED", status_output)
+            self.assertIn("Mixed states detected", status_output)
+
+            # Test cmd_auto in dry-run mode
+            class MockArgs:
+                def __init__(self, dry_run=True):
+                    self.no_ui = False
+                    self.ui_mode = None
+                    self.force = True
+                    self.global_dry_run = dry_run
+                    self.sub_dry_run = False
+
+            dry_buf = io.StringIO()
+            with redirect_stdout(dry_buf):
+                cmd_auto(MockArgs(dry_run=True))
+            dry_output = dry_buf.getvalue()
+
+            self.assertIn("[AUTO-PUSH] Local Regnare_freeport_LO1.ini is newer", dry_output)
+            self.assertIn("[AUTO-PULL] Synced Regnare_freeport_LO2.ini is newer", dry_output)
+            # Verify dry run didn't alter sync file 1 or local file 2
+            with open(p1_sync) as f:
+                self.assertEqual(f.read(), "LO1 old sync content\n")
+            with open(p2_local) as f:
+                self.assertEqual(f.read(), "LO2 old local content\n")
+
+            # Execute real cmd_auto
+            auto_buf = io.StringIO()
+            with redirect_stdout(auto_buf):
+                cmd_auto(MockArgs(dry_run=False))
+
+            # Verify files were updated in their respective directions
+            with open(p1_sync) as f:
+                self.assertEqual(f.read(), "LO1 new local content\n")
+            with open(p2_local) as f:
+                self.assertEqual(f.read(), "LO2 new sync content\n")
+
+            # Verify backups were created in both backup folders
+            sync_backups = os.listdir(os.path.join(sync_dir, "sync_backups"))
+            eq_backups = os.listdir(os.path.join(eq_dir, "sync_backups"))
+            self.assertTrue(any("Regnare_freeport_LO1.ini" in b for b in sync_backups))
+            self.assertTrue(any("Regnare_freeport_LO2.ini" in b for b in eq_backups))
+
+            # Running status again should show in sync
+            in_sync_buf = io.StringIO()
+            with redirect_stdout(in_sync_buf):
+                cmd_status()
+            in_sync_output = in_sync_buf.getvalue()
+            self.assertIn("All character files are in sync!", in_sync_output)
+
+        finally:
+            eql_sync.get_config_path = old_get_config_path
+
 if __name__ == "__main__":
     unittest.main()
