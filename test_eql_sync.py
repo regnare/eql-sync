@@ -757,5 +757,32 @@ SomeCamelCaseKey=Value
             eql_sync.subprocess.Popen = old_popen
             eql_sync.cmd_auto = old_cmd_auto
 
+    def test_help_all_flag(self):
+        import io
+        import sys
+        from contextlib import redirect_stdout
+        import eql_sync
+
+        old_argv = sys.argv
+        try:
+            sys.argv = ["eql_sync.py", "--help-all"]
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                with self.assertRaises(SystemExit) as cm:
+                    eql_sync.main()
+            self.assertEqual(cm.exception.code, 0)
+            output = buf.getvalue()
+            self.assertIn("SUBCOMMAND DETAILS & OPTIONS", output)
+            self.assertIn("eql-sync play", output)
+            self.assertIn("eql-sync auto (sync)", output)
+            self.assertIn("eql-sync push", output)
+            self.assertIn("eql-sync pull", output)
+            self.assertIn("eql-sync status (check)", output)
+            self.assertIn("eql-sync prune", output)
+            self.assertIn("eql-sync install", output)
+            self.assertIn("eql-sync init", output)
+        finally:
+            sys.argv = old_argv
+
 if __name__ == "__main__":
     unittest.main()

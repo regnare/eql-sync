@@ -39,6 +39,14 @@ This will:
 
 ## Usage
 
+### Viewing Options & Help
+To view options for a specific subcommand, put `-h` after the command (e.g. `eql-sync play -h`).
+To view all available options across all subcommands in one reference:
+```bash
+eql-sync --help-all
+# or: eql-sync --all
+```
+
 ### Pushing local settings to the sync folder
 When you finish playing on a machine and want to save your macros, hotkeys, spell slots, and (optionally) UI layout:
 ```bash

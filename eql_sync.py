@@ -1233,12 +1233,16 @@ def cmd_install(args=None):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="EverQuest Legends Sync Tool")
+    parser = argparse.ArgumentParser(
+        description="EverQuest Legends Sync Tool",
+        epilog="Tip: Run 'eql-sync --help-all' to see all options across all subcommands at once."
+    )
     parser.add_argument("-d", "--dry-run", dest="global_dry_run", action="store_true", help="Simulate sync operations without writing any files")
+    parser.add_argument("--help-all", "--all", dest="help_all", action="store_true", help="Show full options for all subcommands at once")
     subparsers = parser.add_subparsers(dest="command", help="Subcommand to run")
     
     # init
-    subparsers.add_parser("init", help="Configure local settings")
+    init_parser = subparsers.add_parser("init", help="Configure local settings")
     
     # install
     install_parser = subparsers.add_parser("install", help="Install eql-sync as a command in ~/.local/bin")
@@ -1267,7 +1271,7 @@ def main():
     auto_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate auto-sync without writing any files")
 
     # status / check
-    subparsers.add_parser("status", aliases=["check"], help="Show current sync status and compare file timestamps")
+    status_parser = subparsers.add_parser("status", aliases=["check"], help="Show current sync status and compare file timestamps")
 
     # prune
     prune_parser = subparsers.add_parser("prune", help="Prune old backup files in local and sync folders")
@@ -1285,7 +1289,43 @@ def main():
     play_parser.add_argument("--ui-mode", choices=["scale_position", "scale_all", "exact", "none"], help="Override UI sync mode")
     play_parser.add_argument("--force", action="store_true", help="Bypass running game warnings and start play session anyway")
     play_parser.add_argument("-d", "--dry-run", dest="sub_dry_run", action="store_true", help="Simulate play session without launching game or writing files")
-    
+
+    subcommand_list = [
+        ("play", play_parser),
+        ("auto (sync)", auto_parser),
+        ("push", push_parser),
+        ("pull", pull_parser),
+        ("status (check)", status_parser),
+        ("prune", prune_parser),
+        ("install", install_parser),
+        ("init", init_parser),
+    ]
+
+    def print_all_help():
+        print("=" * 70)
+        print("EverQuest Legends Sync Tool - Complete Options Reference")
+        print("=" * 70)
+        parser.print_help()
+        print("\n" + "=" * 70)
+        print("SUBCOMMAND DETAILS & OPTIONS")
+        print("=" * 70)
+        for name, sp in subcommand_list:
+            print(f"\n▶ eql-sync {name}")
+            print("-" * 50)
+            sp.print_help()
+
+    # Intercept --help-all or --all or help command
+    if any(arg in ("--help-all", "--all") for arg in sys.argv):
+        print_all_help()
+        sys.exit(0)
+
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "help":
+        if len(sys.argv) > 2 and sys.argv[2].lower() in ("--all", "-a", "all"):
+            print_all_help()
+        else:
+            parser.print_help()
+        sys.exit(0)
+
     args = parser.parse_args()
     
     if not args.command:
